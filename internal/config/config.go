@@ -7,10 +7,11 @@ import (
 )
 
 type Config struct {
-	Duration time.Duration       `mapstructure:"duration" yaml:"duration"`
-	Gateway  string              `mapstructure:"gateway" yaml:"gateway"`
-	LocalIP  string              `mapstructure:"localIp" yaml:"localIp"`
-	Ports    []types.PortMapping `mapstructure:"ports" yaml:"ports"`
+	Duration        time.Duration       `mapstructure:"duration" yaml:"duration"`
+	Gateway         string              `mapstructure:"gateway" yaml:"gateway"`
+	LocalIP         string              `mapstructure:"localIp" yaml:"localIp"`
+	RefreshInterval time.Duration       `mapstructure:"refreshInterval" yaml:"refreshInterval"`
+	Ports           []types.PortMapping `mapstructure:"ports" yaml:"ports"`
 }
 
 func LoadConfig(configPath string) (*Config, error) {

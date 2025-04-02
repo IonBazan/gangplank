@@ -16,7 +16,7 @@ Homelabs and self-hosted setups often run multiple services on a single machine,
 1. **Plex Media Server**  
    Expose Plex running in Docker to your local network or friends outside your NAT:
    ```bash
-   docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest forward --daemon --refresh-interval 15m
+   docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest daemon --refresh-interval 15m
    ```
    Assuming Plex uses port 32400, Gangplank forwards it automatically from your Docker setup.
 
@@ -25,7 +25,7 @@ Homelabs and self-hosted setups often run multiple services on a single machine,
    ```bash
    docker run --rm --network host ionbazan/gangplank:latest add --external 25565 --internal 25565 --protocol TCP --name minecraft
    ```
-   Or use `--daemon` to keep it refreshed and poll Docker events.
+   Or use `daemon` to keep it refreshed and poll Docker events.
 
 3. **Development Web Server**  
    Test a web app locally and share it with a colleague over the internet:
@@ -36,8 +36,8 @@ Homelabs and self-hosted setups often run multiple services on a single machine,
 ## Features
 - Fetch port mappings from Docker containers or YAML files.
 - Forward ports via UPnP to your router.
-- Poll Docker events to dynamically add/remove mappings (`--daemon --poll`).
-- Periodically refresh mappings to prevent expiration (`--daemon` with `--refresh-interval`).
+- Poll Docker events to dynamically add/remove mappings (`daemon --poll`).
+- Periodically refresh mappings to prevent expiration (`daemon` with `--refresh-interval`).
 - Manually add or delete individual port mappings.
 
 ## Installation
@@ -68,12 +68,12 @@ docker run --rm --network host ionbazan/gangplank:latest forward
 #### Run as a Daemon for a Self-Hosted Setup
 Keep ports open for a dynamic homelab, polling Docker events and refreshing every 15 minutes:
 ```bash
-docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest forward --daemon --poll
+docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest daemon --poll
 ```
 
 Customize the refresh interval (e.g., 5 minutes):
 ```bash
-docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest forward --daemon --poll --refresh-interval 5m
+docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest daemon --poll --refresh-interval 5m
 ```
 
 #### Add a Port for a Local Service
@@ -93,13 +93,12 @@ docker run --rm --network host ionbazan/gangplank:latest delete --external 25565
 Set up Gangplank as a persistent service in your homelab with `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
 services:
   gangplank:
     image: ionbazan/gangplank:latest
     network_mode: host
     restart: unless-stopped
-    command: forward --daemon --poll --refresh-interval 15m
+    command: daemon --poll --refresh-interval 15m
 ```
 
 Deploy it:
@@ -113,7 +112,7 @@ docker-compose down
 ```
 
 ### Configuration Options
-- `--cleanup-on-stop`: Deletes mappings when containers stop (use with `--daemon --poll`).
+- `--cleanup-on-stop`: Deletes mappings when containers stop (use with `daemon --poll`).
 - `--local-ip`: Overrides the local IP (e.g., `--local-ip 192.168.1.100` for a specific homelab machine).
 - `--gateway`: Specifies the UPnP gateway URL (e.g., `--gateway http://192.168.1.1:49000/igd.xml`).
 
@@ -133,7 +132,7 @@ ports:
 ```
 
 ## Notes
-- Gangplank uses a 1-hour lease duration for UPnP mappings. In `--daemon` mode, `--refresh-interval` (default 15m) renews them before expiration.
+- Gangplank uses a 1-hour lease duration for UPnP mappings. In `daemon` mode, `--refresh-interval` (default 15m) renews them before expiration.
 - Use `--network host` for UPnP to reach your router; Docker’s bridge network won’t work for homelab NAT traversal.
 
 ## Contributing
@@ -141,3 +140,4 @@ Open issues or PRs on [GitHub](https://github.com/ionbazan/gangplank)!
 
 ## License
 MIT
+

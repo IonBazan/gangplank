@@ -25,4 +25,4 @@ USER gangplank
 
 ENTRYPOINT ["/app/gangplank"]
 
-CMD ["--help"]
+CMD ["daemon", "--poll"]

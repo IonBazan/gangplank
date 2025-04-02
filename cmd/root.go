@@ -6,6 +6,7 @@ import (
 	"github.com/IonBazan/gangplank/internal/upnp"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -30,43 +31,12 @@ var (
 			return upnp.NewDummyClient(duration)
 		}
 
-		fmt.Println("Duration: ", duration)
-
 		return upnp.NewClient(localIP, gateway, duration)
 	}
 	rootCmd = &cobra.Command{
 		Use:   "gangplank",
 		Short: "Gangplank manages port mappings with UPnP",
 		Long:  `Gangplank is a CLI tool to fetch port mappings from various sources and forward them via UPnP.`,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if cmd.Name() == "completion" || cmd.Name() == "help" {
-				return nil
-			}
-
-			var err error
-			cfg, err = config.LoadConfig(configFile)
-			if err != nil && configFile != "" {
-				return fmt.Errorf("error loading config file: %w", err)
-			}
-
-			if cfg == nil {
-				cfg = &config.Config{}
-			}
-
-			if localIP == "" && cfg.LocalIP != "" {
-				localIP = cfg.LocalIP
-			}
-
-			if gateway == "" && cfg.Gateway != "" {
-				gateway = cfg.Gateway
-			}
-
-			if duration == upnp.DefaultLeaseDuration && cfg.Duration > 0 {
-				duration = cfg.Duration
-			}
-
-			return nil
-		},
 	}
 )
 
@@ -89,6 +59,7 @@ func init() {
 	rootCmd.AddCommand(forwardCmd)
 	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(deleteCmd)
+	rootCmd.AddCommand(daemonCmd) // Add the new daemon command
 }
 
 // bindFlags binds each cobra flag to its associated viper configuration
@@ -109,6 +80,25 @@ func initConfig() {
 	viper.AutomaticEnv()
 	viper.SetEnvPrefix(envPrefix)
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	cfg, err := config.LoadConfig(configFile)
+	if err != nil && configFile != "" {
+		log.Fatalf("error loading config file: %v", err)
+	}
+
+	if cfg != nil {
+		if cfg.RefreshInterval > 0 {
+			viper.SetDefault("refresh-interval", cfg.RefreshInterval)
+		}
+
+		if cfg.LocalIP != "" {
+			viper.SetDefault("local-ip", cfg.LocalIP)
+		}
+
+		if cfg.Duration > 0 {
+			viper.SetDefault("duration", cfg.Duration)
+		}
+	}
 
 	bindFlags(rootCmd)
 
