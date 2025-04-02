@@ -1,3 +1,6 @@
+localIp: ~
+gateway: ~
+duration: 20m
 ports:
   - externalPort: 8080
     internalPort: 80

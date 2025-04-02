@@ -36,8 +36,8 @@ var (
 			}
 
 			portFetchers := []types.PortFetcher{
+				fetchers.NewConfigPortFetcher(cfg),
 				fetchers.NewDockerPortFetcher(dockerCli),
-				fetchers.NewYamlPortFetcher("config.yaml"),
 			}
 			eventFetchers := []types.EventPortFetcher{
 				fetchers.NewDockerEventPortFetcher(dockerCli),

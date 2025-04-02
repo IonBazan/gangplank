@@ -10,10 +10,10 @@ import (
 
 // PortMapping represents a single port mapping configuration.
 type PortMapping struct {
-	ExternalPort int    `yaml:"externalPort"`
-	InternalPort int    `yaml:"internalPort"`
-	Protocol     string `yaml:"protocol"`
-	Name         string `yaml:"name"`
+	ExternalPort int    `mapstructure:"externalPort" yaml:"externalPort"`
+	InternalPort int    `mapstructure:"internalPort" yaml:"internalPort"`
+	Protocol     string `mapstructure:"protocol" yaml:"protocol"`
+	Name         string `mapstructure:"name" yaml:"name"`
 }
 
 // PortFetcher is for static port fetching.
