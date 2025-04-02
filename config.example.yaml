@@ -1,0 +1,9 @@
+ports:
+  - externalPort: 8080
+    internalPort: 80
+    protocol: TCP
+    name: yaml-web
+  - externalPort: 9000
+    internalPort: 90
+    protocol: UDP
+    name: yaml-stream
