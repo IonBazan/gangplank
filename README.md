@@ -1,3 +1,5 @@
+![logo](logo.png)
+
 # Gangplank
 
 Gangplank is a CLI tool to manage UPnP port mappings, designed with Docker in mind. 
