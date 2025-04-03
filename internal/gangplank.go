@@ -43,6 +43,7 @@ func (g *Gangplank) GetPortMappings() ([]types.PortMapping, error) {
 	for _, portProvider := range g.PortProviders {
 		ports, err := portProvider.GetPortMappings()
 		if err != nil {
+			log.Printf("Error occurred: %s", err)
 			return nil, err
 		}
 		allPorts = append(allPorts, ports...)

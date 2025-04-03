@@ -13,7 +13,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o gangplank -ldflags="-w -s" .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w \
+	-X 'cmd.version=$VERSION' \
+	-X 'cmd.created=$CREATED' \
+	-X 'cmd.commit=$COMMIT' \
+    " -o gangplank
 
 FROM alpine:3
 
@@ -22,10 +26,6 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 
 COPY --from=builder /app/gangplank /app/gangplank
-
-RUN adduser -D -H -h /app gangplank
-
-USER gangplank
 
 ENTRYPOINT ["/app/gangplank"]
 

@@ -32,7 +32,10 @@ docker pull ionbazan/gangplank:latest
 Run Gangplank as a daemon (default mode):
 
 ```bash
-docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest
+docker run -d --network host \
+    --restart unless-stopped \
+    -v /var/run/docker.sock:/var/run/docker.sock:ro \
+    ionbazan/gangplank:latest
 ```
 
 or add it to your `docker-compose.yml`:
@@ -42,6 +45,8 @@ services:
   gangplank:
     image: ionbazan/gangplank
     network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 ```
 
