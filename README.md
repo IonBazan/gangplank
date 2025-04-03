@@ -197,3 +197,11 @@ Open issues or PRs on [GitHub](https://github.com/ionbazan/gangplank)!
 ## License
 MIT
 
+## Similar Projects
+
+There are existing projects that provide similar functionality, but they are either outdated or not actively maintained. 
+Gangplank aims to fill this gap with a modern, Docker-centric approach to UPnP port mapping.
+
+- https://github.com/danielbodart/portical
+- https://github.com/ProjectInitiative/upnp-service
+
