@@ -55,7 +55,7 @@ var (
 )
 
 func Execute() {
-	fmt.Println(banner)
+	fmt.Print(banner)
 	fmt.Printf("Running version %s built on %s (commit %s)\n", version, created, commit)
 
 	err := rootCmd.Execute()
