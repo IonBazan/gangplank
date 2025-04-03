@@ -1,7 +1,7 @@
 package types
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -14,16 +14,6 @@ type PortMapping struct {
 	InternalPort int    `mapstructure:"internalPort" yaml:"internalPort"`
 	Protocol     string `mapstructure:"protocol" yaml:"protocol"`
 	Name         string `mapstructure:"name" yaml:"name"`
-}
-
-// PortFetcher is for static port fetching.
-type PortFetcher interface {
-	FetchPorts() ([]PortMapping, error)
-}
-
-// EventPortFetcher is for event-driven port fetching using channels.
-type EventPortFetcher interface {
-	Listen(ctx context.Context, addCh chan<- PortMapping, deleteCh chan<- PortMapping)
 }
 
 func (p PortMapping) Validate() error {
@@ -78,5 +68,5 @@ func ParsePortMapping(mappingStr string) (PortMapping, error) {
 
 func logError(msg string) error {
 	log.Printf("Error parsing port mapping: %s", msg)
-	return fmt.Errorf(msg)
+	return errors.New(msg)
 }

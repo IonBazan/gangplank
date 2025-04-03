@@ -30,7 +30,7 @@ var (
 
 			gp := internal.NewGangplank(cfg, upnpClient)
 
-			initialPorts, _ := gp.FetchPorts()
+			initialPorts, _ := gp.GetPortMappings()
 
 			listPorts(initialPorts)
 			gp.ForwardPorts(initialPorts)
@@ -45,7 +45,7 @@ var (
 						return
 					case <-ticker.C:
 						log.Printf("Updating port mappings...")
-						ports, _ := gp.FetchPorts()
+						ports, _ := gp.GetPortMappings()
 						if len(ports) > 0 {
 							log.Printf("Refreshing %d port mappings", len(ports))
 							gp.ForwardPorts(ports)

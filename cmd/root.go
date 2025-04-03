@@ -28,7 +28,7 @@ var (
 	duration        time.Duration
 	SetupUPnPClient = func() (*upnp.Client, error) {
 		if dryRun {
-			return upnp.NewDummyClient(duration)
+			return upnp.NewDummyClient(duration), nil
 		}
 
 		return upnp.NewClient(localIP, gateway, duration)

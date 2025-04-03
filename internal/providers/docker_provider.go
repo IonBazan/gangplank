@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"context"
@@ -13,15 +13,15 @@ type ContainerLister interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 }
 
-type DockerPortFetcher struct {
+type DockerPortProvider struct {
 	dockerCli ContainerLister
 }
 
-func NewDockerPortFetcher(cli ContainerLister) *DockerPortFetcher {
-	return &DockerPortFetcher{dockerCli: cli}
+func NewDockerPortProvider(cli ContainerLister) *DockerPortProvider {
+	return &DockerPortProvider{dockerCli: cli}
 }
 
-func (d *DockerPortFetcher) FetchPorts() ([]types.PortMapping, error) {
+func (d *DockerPortProvider) GetPortMappings() ([]types.PortMapping, error) {
 	containers, err := d.dockerCli.ContainerList(context.Background(), container.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("status", "running")),
 	})

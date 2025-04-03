@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/IonBazan/gangplank/internal/config"
-	"github.com/IonBazan/gangplank/internal/fetchers"
+	"github.com/IonBazan/gangplank/internal/providers"
 	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/IonBazan/gangplank/internal/upnp"
 	"github.com/docker/docker/client"
@@ -12,9 +12,9 @@ import (
 )
 
 type Gangplank struct {
-	fetchers      []types.PortFetcher
-	eventFetchers []types.EventPortFetcher
-	upnpClient    *upnp.Client
+	PortProviders      []providers.PortProvider
+	EventPortProviders []providers.EventPortProvider
+	upnpClient         *upnp.Client
 }
 
 func NewGangplank(cfg *config.Config, upnpClient *upnp.Client) *Gangplank {
@@ -24,21 +24,21 @@ func NewGangplank(cfg *config.Config, upnpClient *upnp.Client) *Gangplank {
 	}
 
 	return &Gangplank{
-		fetchers: []types.PortFetcher{
-			fetchers.NewConfigPortFetcher(cfg),
-			fetchers.NewDockerPortFetcher(dockerCli),
+		PortProviders: []providers.PortProvider{
+			providers.NewConfigPortProvider(cfg),
+			providers.NewDockerPortProvider(dockerCli),
 		},
-		eventFetchers: []types.EventPortFetcher{
-			fetchers.NewDockerEventPortFetcher(dockerCli),
+		EventPortProviders: []providers.EventPortProvider{
+			providers.NewDockerEventPortProvider(dockerCli),
 		},
 		upnpClient: upnpClient,
 	}
 }
 
-func (g *Gangplank) FetchPorts() ([]types.PortMapping, error) {
-	var allPorts []types.PortMapping
-	for _, fetcher := range g.fetchers {
-		ports, err := fetcher.FetchPorts()
+func (g *Gangplank) GetPortMappings() ([]types.PortMapping, error) {
+	allPorts := []types.PortMapping{}
+	for _, portProvider := range g.PortProviders {
+		ports, err := portProvider.GetPortMappings()
 		if err != nil {
 			return nil, err
 		}
@@ -60,8 +60,8 @@ func (g *Gangplank) PollAndForward(ctx context.Context, cleanup bool) {
 	addCh := make(chan types.PortMapping)
 	deleteCh := make(chan types.PortMapping)
 
-	for _, fetcher := range g.eventFetchers {
-		go fetcher.Listen(ctx, addCh, deleteCh)
+	for _, provider := range g.EventPortProviders {
+		go provider.Listen(ctx, providers.PortEventChannels{Add: addCh, Delete: deleteCh})
 	}
 
 	if g.upnpClient != nil && cleanup {

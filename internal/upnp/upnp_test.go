@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type MockUPnPClient struct {
+type MockUPnPConnection struct {
 	AddCalls []struct {
 		ExtPort, IntPort   uint16
 		Protocol, IP, Desc string
@@ -22,11 +22,11 @@ type MockUPnPClient struct {
 	ExtIP     string
 }
 
-func (m *MockUPnPClient) GetExternalIPAddress() (string, error) {
+func (m *MockUPnPConnection) GetExternalIPAddress() (string, error) {
 	return m.ExtIP, nil
 }
 
-func (m *MockUPnPClient) AddPortMapping(
+func (m *MockUPnPConnection) AddPortMapping(
 	NewRemoteHost string,
 	NewExternalPort uint16,
 	NewProtocol string,
@@ -49,7 +49,7 @@ func (m *MockUPnPClient) AddPortMapping(
 	return m.AddErr
 }
 
-func (m *MockUPnPClient) DeletePortMapping(
+func (m *MockUPnPConnection) DeletePortMapping(
 	NewRemoteHost string,
 	NewExternalPort uint16,
 	NewProtocol string,
@@ -130,7 +130,7 @@ func TestClient_ForwardPorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &MockUPnPClient{
+			mock := &MockUPnPConnection{
 				AddCalls: []struct {
 					ExtPort, IntPort   uint16
 					Protocol, IP, Desc string
@@ -138,8 +138,8 @@ func TestClient_ForwardPorts(t *testing.T) {
 				AddErr: tt.addErr,
 			}
 			client := &Client{
-				upnpClient: mock,
-				LocalIP:    tt.localIP,
+				uPnPConnection: mock,
+				LocalIP:        tt.localIP,
 			}
 
 			err := client.ForwardPorts(tt.mappings)
@@ -190,7 +190,7 @@ func TestClient_DeletePortMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &MockUPnPClient{
+			mock := &MockUPnPConnection{
 				DeleteCalls: []struct {
 					ExtPort  uint16
 					Protocol string
@@ -198,8 +198,8 @@ func TestClient_DeletePortMapping(t *testing.T) {
 				DeleteErr: tt.deleteErr,
 			}
 			client := &Client{
-				upnpClient: mock,
-				LocalIP:    "192.168.1.100",
+				uPnPConnection: mock,
+				LocalIP:        "192.168.1.100",
 			}
 
 			err := client.DeletePortMapping(tt.extPort, tt.protocol)

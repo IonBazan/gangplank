@@ -16,7 +16,7 @@ import (
 const DefaultLeaseDuration = 60 * time.Minute
 const defaultDescription = "Gangplank UPnP"
 
-type UPnPClient interface {
+type UPnPConnection interface {
 	AddPortMapping(
 		NewRemoteHost string,
 		NewExternalPort uint16,
@@ -42,13 +42,13 @@ type UPnPClient interface {
 
 // Client wraps the UPnP client and local IP for port forwarding.
 type Client struct {
-	upnpClient UPnPClient
-	LocalIP    string
-	duration   time.Duration
+	uPnPConnection UPnPConnection
+	LocalIP        string
+	duration       time.Duration
 }
 
 func NewClient(localIPOverride, gatewayOverride string, duration time.Duration) (*Client, error) {
-	var upnpClient UPnPClient
+	var upnpClient UPnPConnection
 	var err error
 
 	if gatewayOverride != "" {
@@ -70,23 +70,19 @@ func NewClient(localIPOverride, gatewayOverride string, duration time.Duration) 
 		}
 	}
 
-	return &Client{
-		upnpClient: upnpClient,
-		LocalIP:    localIP,
-		duration:   duration,
-	}, nil
+	return NewClientWithConnection(upnpClient, localIP, duration), nil
 }
 
-func NewClientWithMock(mock UPnPClient, localIP string, duration time.Duration) (*Client, error) {
+func NewClientWithConnection(connection UPnPConnection, localIP string, duration time.Duration) *Client {
 	return &Client{
-		upnpClient: mock,
-		LocalIP:    localIP,
-		duration:   duration,
-	}, nil
+		uPnPConnection: connection,
+		LocalIP:        localIP,
+		duration:       duration,
+	}
 }
 
-func NewDummyClient(duration time.Duration) (*Client, error) {
-	return NewClientWithMock(&DummyConnection{}, "192.168.1.100", duration)
+func NewDummyClient(duration time.Duration) *Client {
+	return NewClientWithConnection(&DummyConnection{}, "192.168.1.100", duration)
 }
 
 func (u *Client) ForwardPorts(mappings []types.PortMapping) error {
@@ -106,7 +102,7 @@ func (u *Client) addPortMapping(m types.PortMapping) error {
 	if m.Name != "" {
 		description = fmt.Sprintf("%s: %s", defaultDescription, m.Name)
 	}
-	return u.upnpClient.AddPortMapping(
+	return u.uPnPConnection.AddPortMapping(
 		"",
 		uint16(m.ExternalPort),
 		m.Protocol,
@@ -119,10 +115,10 @@ func (u *Client) addPortMapping(m types.PortMapping) error {
 }
 
 func (u *Client) DeletePortMapping(externalPort int, protocol string) error {
-	return u.upnpClient.DeletePortMapping("", uint16(externalPort), protocol)
+	return u.uPnPConnection.DeletePortMapping("", uint16(externalPort), protocol)
 }
 
-func discoverGateway(ctx context.Context) (UPnPClient, error) {
+func discoverGateway(ctx context.Context) (UPnPConnection, error) {
 	if clients, _, err := internetgateway2.NewWANIPConnection2Clients(); err == nil && len(clients) > 0 {
 		return clients[0], nil
 	}
@@ -132,7 +128,7 @@ func discoverGateway(ctx context.Context) (UPnPClient, error) {
 	return nil, fmt.Errorf("no UPnP IGD found within timeout")
 }
 
-func clientFromGateway(gatewayURL string) (UPnPClient, error) {
+func clientFromGateway(gatewayURL string) (UPnPConnection, error) {
 	location, err := url.Parse(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid gateway URL: %v", err)

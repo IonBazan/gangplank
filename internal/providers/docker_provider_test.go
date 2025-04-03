@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"context"
@@ -21,7 +21,7 @@ func (m *MockDockerClient) ContainerList(ctx context.Context, options container.
 	return m.Containers, nil
 }
 
-func TestDockerPortFetcher_FetchPorts(t *testing.T) {
+func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 	tests := []struct {
 		name       string
 		containers []container.Summary
@@ -98,9 +98,9 @@ func TestDockerPortFetcher_FetchPorts(t *testing.T) {
 			mockClient := &MockDockerClient{
 				Containers: tt.containers,
 			}
-			fetcher := NewDockerPortFetcher(mockClient)
+			portProvider := NewDockerPortProvider(mockClient)
 
-			gotPorts, err := fetcher.FetchPorts()
+			gotPorts, err := portProvider.GetPortMappings()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, gotPorts)
@@ -108,8 +108,7 @@ func TestDockerPortFetcher_FetchPorts(t *testing.T) {
 				assert.NoError(t, err)
 				assert.ElementsMatch(t, tt.wantPorts, gotPorts)
 
-				client, err := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				assert.NoError(t, err)
+				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
 				err = client.ForwardPorts(gotPorts)
 				assert.NoError(t, err)
 			}

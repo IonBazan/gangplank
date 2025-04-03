@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"fmt"
@@ -6,15 +6,15 @@ import (
 	"github.com/IonBazan/gangplank/internal/types"
 )
 
-type ConfigPortFetcher struct {
+type CofingPortProvider struct {
 	config *config.Config
 }
 
-func NewConfigPortFetcher(config *config.Config) *ConfigPortFetcher {
-	return &ConfigPortFetcher{config}
+func NewConfigPortProvider(config *config.Config) *CofingPortProvider {
+	return &CofingPortProvider{config}
 }
 
-func (f *ConfigPortFetcher) FetchPorts() ([]types.PortMapping, error) {
+func (f *CofingPortProvider) GetPortMappings() ([]types.PortMapping, error) {
 	if f.config == nil {
 		return []types.PortMapping{}, nil
 	}

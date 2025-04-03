@@ -1,43 +1,43 @@
-package fetchers
+package providers
 
 import (
 	"context"
-	"github.com/docker/docker/api/types/events"
+	dockerevents "github.com/docker/docker/api/types/events"
 	"log"
 	"strconv"
 	"strings"
 
-	gangplanktypes "github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 )
 
-// EventInspector defines the minimal interface for DockerEventPortFetcher.
+// EventInspector defines the minimal interface for DockerEventPortProvider.
 type EventInspector interface {
-	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
+	Events(ctx context.Context, options dockerevents.ListOptions) (<-chan dockerevents.Message, <-chan error)
 	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 }
 
-type DockerEventPortFetcher struct {
+type DockerEventPortProvider struct {
 	dockerCli EventInspector
 }
 
-func NewDockerEventPortFetcher(cli EventInspector) *DockerEventPortFetcher {
-	return &DockerEventPortFetcher{dockerCli: cli}
+func NewDockerEventPortProvider(cli EventInspector) *DockerEventPortProvider {
+	return &DockerEventPortProvider{dockerCli: cli}
 }
 
-func (d *DockerEventPortFetcher) FetchPorts() ([]gangplanktypes.PortMapping, error) {
+func (d *DockerEventPortProvider) GetPortMappings() ([]types.PortMapping, error) {
 	return nil, nil
 }
 
-func (d *DockerEventPortFetcher) Listen(ctx context.Context, addCh chan<- gangplanktypes.PortMapping, deleteCh chan<- gangplanktypes.PortMapping) {
+func (d *DockerEventPortProvider) Listen(ctx context.Context, events PortEventChannels) {
 	filterArgs := filters.NewArgs(
 		filters.Arg("type", "container"),
 		filters.Arg("event", "start"),
 		filters.Arg("event", "stop"),
 		filters.Arg("event", "die"),
 	)
-	eventChan, errChan := d.dockerCli.Events(ctx, events.ListOptions{
+	eventChan, errChan := d.dockerCli.Events(ctx, dockerevents.ListOptions{
 		Filters: filterArgs,
 	})
 	for {
@@ -45,10 +45,12 @@ func (d *DockerEventPortFetcher) Listen(ctx context.Context, addCh chan<- gangpl
 		case event := <-eventChan:
 			switch event.Action {
 			case "start":
-				go d.handleContainerStart(event.Actor.ID, addCh)
+				if events.Add != nil {
+					go d.handleContainerStart(event.Actor.ID, events.Add)
+				}
 			case "stop", "die":
-				if deleteCh != nil {
-					go d.handleContainerStop(event.Actor.ID, deleteCh)
+				if events.Delete != nil {
+					go d.handleContainerStop(event.Actor.ID, events.Delete)
 				}
 			}
 		case err := <-errChan:
@@ -62,7 +64,7 @@ func (d *DockerEventPortFetcher) Listen(ctx context.Context, addCh chan<- gangpl
 	}
 }
 
-func (d *DockerEventPortFetcher) handleContainerStart(containerID string, addCh chan<- gangplanktypes.PortMapping) {
+func (d *DockerEventPortProvider) handleContainerStart(containerID string, addCh chan<- types.PortMapping) {
 	info, err := d.dockerCli.ContainerInspect(context.Background(), containerID)
 	if err != nil {
 		log.Printf("Failed to inspect container %s: %v", containerID[:12], err)
@@ -100,7 +102,7 @@ func (d *DockerEventPortFetcher) handleContainerStart(containerID string, addCh 
 	}
 }
 
-func (d *DockerEventPortFetcher) handleContainerStop(containerID string, deleteCh chan<- gangplanktypes.PortMapping) {
+func (d *DockerEventPortProvider) handleContainerStop(containerID string, deleteCh chan<- types.PortMapping) {
 	info, err := d.dockerCli.ContainerInspect(context.Background(), containerID)
 	if err != nil {
 		log.Printf("Failed to inspect container %s: %v", containerID[:12], err)

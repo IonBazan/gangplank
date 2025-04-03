@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"testing"

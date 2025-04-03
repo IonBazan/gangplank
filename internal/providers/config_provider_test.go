@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConfigPortFetcher_FetchPorts(t *testing.T) {
+func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      *config.Config
@@ -73,9 +73,9 @@ func TestConfigPortFetcher_FetchPorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fetcher := NewConfigPortFetcher(tt.config)
+			portProvider := NewConfigPortProvider(tt.config)
 
-			gotPorts, err := fetcher.FetchPorts()
+			gotPorts, err := portProvider.GetPortMappings()
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)
@@ -86,9 +86,8 @@ func TestConfigPortFetcher_FetchPorts(t *testing.T) {
 			}
 
 			if !tt.wantErr && len(gotPorts) > 0 {
-				client, err := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				assert.NoError(t, err)
-				err = client.ForwardPorts(gotPorts)
+				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
+				err := client.ForwardPorts(gotPorts)
 				assert.NoError(t, err, "Dummy client should not fail")
 			}
 		})

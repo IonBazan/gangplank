@@ -1,6 +1,7 @@
 localIp: ~
 gateway: ~
-duration: 20m
+duration: 60m
+refreshInterval: 15m
 ports:
   - externalPort: 8080
     internalPort: 80

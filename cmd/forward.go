@@ -22,7 +22,7 @@ var (
 
 			gp := internal.NewGangplank(cfg, upnpClient)
 
-			initialPorts, _ := gp.FetchPorts()
+			initialPorts, _ := gp.GetPortMappings()
 
 			listPorts(initialPorts)
 			gp.ForwardPorts(initialPorts)

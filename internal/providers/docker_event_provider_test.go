@@ -1,4 +1,4 @@
-package fetchers
+package providers
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func (m *MockEventClient) ContainerInspect(ctx context.Context, containerID stri
 	return container.InspectResponse{}, assert.AnError
 }
 
-func TestDockerEventPortFetcher_Listen(t *testing.T) {
+func TestDockerEventPortProvider_Listen(t *testing.T) {
 	tests := []struct {
 		name       string
 		containers map[string]container.InspectResponse
@@ -152,14 +152,14 @@ func TestDockerEventPortFetcher_Listen(t *testing.T) {
 				ErrChan:    errChan,
 				Inspect:    tt.containers,
 			}
-			fetcher := NewDockerEventPortFetcher(mockClient)
+			portProvider := NewDockerEventPortProvider(mockClient)
 
 			addCh := make(chan types.PortMapping, 10)
 			deleteCh := make(chan types.PortMapping, 10)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			go fetcher.Listen(ctx, addCh, deleteCh)
+			go portProvider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
 
 			// Send events
 			for _, event := range tt.events {
@@ -186,9 +186,8 @@ func TestDockerEventPortFetcher_Listen(t *testing.T) {
 			assert.ElementsMatch(t, tt.wantDelete, gotDelete)
 
 			if len(gotAdd) > 0 {
-				client, err := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				assert.NoError(t, err)
-				err = client.ForwardPorts(gotAdd)
+				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
+				err := client.ForwardPorts(gotAdd)
 				assert.NoError(t, err)
 			}
 		})
