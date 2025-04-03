@@ -14,7 +14,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const banner = `
+░█▀▀░█▀█░█▀█░█▀▀░█▀█░█░░░█▀█░█▀█░█░█
+░█░█░█▀█░█░█░█░█░█▀▀░█░░░█▀█░█░█░█▀▄
+░▀▀▀░▀░▀░▀░▀░▀▀▀░▀░░░▀▀▀░▀░▀░▀░▀░▀░▀
+`
+
 const envPrefix = "GANGPLANK"
+
+//nolint:gochecknoglobals
+var (
+	version = "unknown"
+	commit  = "unknown"
+	created = "an unknown date"
+)
 
 var (
 	configFile string
@@ -34,13 +47,17 @@ var (
 		return upnp.NewClient(localIP, gateway, duration)
 	}
 	rootCmd = &cobra.Command{
-		Use:   "gangplank",
-		Short: "Gangplank manages port mappings with UPnP",
-		Long:  `Gangplank is a CLI tool to fetch port mappings from various sources and forward them via UPnP.`,
+		Use:     "gangplank",
+		Short:   "Gangplank manages port mappings with UPnP",
+		Long:    `Gangplank is a CLI tool to fetch port mappings from various sources and forward them via UPnP.`,
+		Version: fmt.Sprintf("%s (commit: %s, created: %s)", version, commit, created),
 	}
 )
 
 func Execute() {
+	fmt.Println(banner)
+	fmt.Printf("Running version %s built on %s (commit %s)\n", version, created, commit)
+
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)

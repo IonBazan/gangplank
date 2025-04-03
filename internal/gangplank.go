@@ -23,6 +23,8 @@ func NewGangplank(cfg *config.Config, upnpClient *upnp.Client) *Gangplank {
 		log.Fatalf("Failed to create Docker client: %v", err)
 	}
 
+	log.Printf("Connected to Docker daemon via %s", dockerCli.DaemonHost())
+
 	return &Gangplank{
 		PortProviders: []providers.PortProvider{
 			providers.NewConfigPortProvider(cfg),
@@ -36,6 +38,7 @@ func NewGangplank(cfg *config.Config, upnpClient *upnp.Client) *Gangplank {
 }
 
 func (g *Gangplank) GetPortMappings() ([]types.PortMapping, error) {
+	log.Println("Fetching port mappings...")
 	allPorts := []types.PortMapping{}
 	for _, portProvider := range g.PortProviders {
 		ports, err := portProvider.GetPortMappings()
@@ -44,6 +47,7 @@ func (g *Gangplank) GetPortMappings() ([]types.PortMapping, error) {
 		}
 		allPorts = append(allPorts, ports...)
 	}
+	log.Printf("Fetched %d port mappings", len(allPorts))
 	return allPorts, nil
 }
 

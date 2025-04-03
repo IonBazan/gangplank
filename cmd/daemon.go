@@ -18,6 +18,7 @@ var (
 		Short: "Run as a daemon with polling and port refreshing",
 		Long:  `Runs Gangplank as a daemon, listening for container events and refreshing port mappings at intervals.`,
 		Run: func(cmd *cobra.Command, args []string) {
+			log.Println("Starting Gangplank daemon...")
 			upnpClient, err := SetupUPnPClient()
 			if err != nil {
 				log.Printf("Failed to initialize UPnP client: %v, proceeding without UPnP forwarding", err)

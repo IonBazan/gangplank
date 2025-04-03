@@ -1,3 +1,7 @@
+ARG VERSION=unknown
+ARG CREATED="an unknown date"
+ARG COMMIT=unknown
+
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /app

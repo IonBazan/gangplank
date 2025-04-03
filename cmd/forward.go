@@ -13,6 +13,7 @@ var (
 		Short: "Fetch and forward port mappings",
 		Long:  `Fetches port mappings from Docker and YAML sources and forwards them via UPnP with Gangplank.`,
 		Run: func(cmd *cobra.Command, args []string) {
+			log.Println("Starting Gangplank...")
 			upnpClient, err := SetupUPnPClient()
 			if err != nil {
 				log.Printf("Failed to initialize UPnP client: %v, proceeding without UPnP forwarding", err)
