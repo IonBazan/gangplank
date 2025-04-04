@@ -40,7 +40,8 @@ Besides of daemon mode, Gangplank offers several commands to manage port mapping
 
 Forward ports from running Docker containers (e.g., a homelab NAS or game server):
 ```bash
-docker run --rm --network host ionbazan/gangplank:latest forward
+docker run --rm --network host \
+    ionbazan/gangplank:latest forward
 ```
 
 Please note that because default rules TTL is 1 hour, you will need to run this command every hour to keep the mappings alive.
@@ -50,20 +51,23 @@ Consider adding it to your cron, or use the `daemon` mode instead.
 
 Keep ports open for a dynamic homelab, polling Docker events and refreshing every 15 minutes:
 ```bash
-docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest daemon --poll
+docker run -d --network host --restart unless-stopped \
+    ionbazan/gangplank:latest daemon --poll
 ```
 
 Customize the refresh interval (e.g., 5 minutes):
 
 ```bash
-docker run -d --network host --restart unless-stopped ionbazan/gangplank:latest daemon --poll --refresh-interval 5m
+docker run -d --network host --restart unless-stopped \
+    ionbazan/gangplank:latest daemon --poll --refresh-interval 5m
 ```
 
 #### Add a Port for a Local Service
 
 Expose a self-hosted service (e.g., Nextcloud) outside your NAT:
 ```bash
-docker run --rm --network host ionbazan/gangplank:latest add --external 443 --internal 443 --protocol TCP --name nextcloud
+docker run --rm --network host \
+    ionbazan/gangplank:latest add --external 443 --internal 443 --protocol TCP --name nextcloud
 ```
 
 #### Delete a Port Mapping
@@ -71,5 +75,6 @@ docker run --rm --network host ionbazan/gangplank:latest add --external 443 --in
 Remove a mapping when you’re done (e.g., after a gaming session):
 
 ```bash
-docker run --rm --network host ionbazan/gangplank:latest delete --external 25565 --protocol TCP
+docker run --rm --network host \
+    ionbazan/gangplank:latest delete --external 25565 --protocol TCP
 ```
