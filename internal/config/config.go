@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-	Duration        time.Duration       `mapstructure:"duration" yaml:"duration"`
+	Ttl             time.Duration       `mapstructure:"ttl" yaml:"ttl"`
 	Gateway         string              `mapstructure:"gateway" yaml:"gateway"`
 	LocalIP         string              `mapstructure:"localIp" yaml:"localIp"`
 	RefreshInterval time.Duration       `mapstructure:"refreshInterval" yaml:"refreshInterval"`

@@ -38,13 +38,13 @@ var (
 	dryRun          bool
 	localIP         string
 	gateway         string
-	duration        time.Duration
+	ttl             time.Duration
 	SetupUPnPClient = func() (*upnp.Client, error) {
 		if dryRun {
-			return upnp.NewDummyClient(duration), nil
+			return upnp.NewDummyClient(ttl), nil
 		}
 
-		return upnp.NewClient(localIP, gateway, duration)
+		return upnp.NewClient(localIP, gateway, ttl)
 	}
 	rootCmd = &cobra.Command{
 		Use:     "gangplank",
@@ -71,7 +71,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Do not apply changes - only list the ports")
 	rootCmd.PersistentFlags().StringVar(&localIP, "local-ip", "", "Local IP address to use for UPnP (default: auto-detected)")
 	rootCmd.PersistentFlags().StringVar(&gateway, "gateway", "", "UPnP gateway location URL (default: auto-detected)")
-	rootCmd.PersistentFlags().DurationVar(&duration, "duration", upnp.DefaultLeaseDuration, "UPnP lease duration")
+	rootCmd.PersistentFlags().DurationVar(&ttl, "ttl", upnp.DefaultLeaseDuration, "UPnP lease duration")
 
 	rootCmd.AddCommand(forwardCmd)
 	rootCmd.AddCommand(addCmd)
@@ -113,8 +113,8 @@ func initConfig() {
 			viper.SetDefault("local-ip", cfg.LocalIP)
 		}
 
-		if cfg.Duration > 0 {
-			viper.SetDefault("duration", cfg.Duration)
+		if cfg.Ttl > 0 {
+			viper.SetDefault("ttl", cfg.Ttl)
 		}
 	}
 
