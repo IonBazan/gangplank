@@ -41,57 +41,6 @@ func (m *MockEventPortProvider) Listen(ctx context.Context, events providers.Por
 	}()
 }
 
-type MockUPnPConnection struct {
-	Forwarded []types.PortMapping
-	Deleted   []struct {
-		ExtPort  uint16
-		Protocol string
-	}
-	ForwardErr error
-	DeleteErr  error
-}
-
-func (m *MockUPnPConnection) GetExternalIPAddress() (string, error) {
-	return "192.168.1.1", nil
-}
-
-func (m *MockUPnPConnection) AddPortMapping(
-	NewRemoteHost string,
-	NewExternalPort uint16,
-	NewProtocol string,
-	NewInternalPort uint16,
-	NewInternalClient string,
-	NewEnabled bool,
-	NewPortMappingDescription string,
-	NewLeaseDuration uint32,
-) error {
-	if m.ForwardErr != nil {
-		return m.ForwardErr
-	}
-	m.Forwarded = append(m.Forwarded, types.PortMapping{
-		ExternalPort: int(NewExternalPort),
-		InternalPort: int(NewInternalPort),
-		Protocol:     NewProtocol,
-		Name:         NewPortMappingDescription,
-	})
-	return nil
-}
-
-func (m *MockUPnPConnection) DeletePortMapping(
-	NewRemoteHost string,
-	NewExternalPort uint16,
-	NewProtocol string,
-) error {
-	if m.DeleteErr != nil {
-		return m.DeleteErr
-	}
-	m.Deleted = append(m.Deleted, struct {
-		ExtPort  uint16
-		Protocol string
-	}{NewExternalPort, NewProtocol})
-	return nil
-}
-
 func TestGangplank_GetPortMappings(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -166,7 +115,7 @@ func TestGangplank_ForwardPorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockConnection := &MockUPnPConnection{}
+			mockConnection := &upnp.DummyConnection{}
 			var upnpClient *upnp.Client
 			if tt.name != "No UPnP client" {
 				if tt.wantErr {
@@ -179,7 +128,14 @@ func TestGangplank_ForwardPorts(t *testing.T) {
 				upnpClient: upnpClient,
 			}
 			err := g.ForwardPorts(tt.ports)
-			assert.NoError(t, err)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Equal(t, mockConnection.ForwardErr, err)
+			} else {
+				assert.NoError(t, err)
+			}
+
 			if tt.upnpClient != nil {
 				assert.Equal(t, tt.wantMapped, mockConnection.Forwarded)
 			}
@@ -222,7 +178,7 @@ func TestGangplank_PollAndForward(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockConnection := &MockUPnPConnection{}
+			mockConnection := &upnp.DummyConnection{}
 			var upnpClient *upnp.Client
 			if tt.name != "Poll without UPnP" {
 				upnpClient = upnp.NewClientWithConnection(mockConnection, "192.168.1.100", upnp.DefaultLeaseDuration)

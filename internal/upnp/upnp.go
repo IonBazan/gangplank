@@ -3,6 +3,7 @@ package upnp
 import (
 	"context"
 	"fmt"
+	"github.com/huin/goupnp/soap"
 	"log"
 	"net"
 	"net/url"
@@ -38,6 +39,21 @@ type UPnPConnection interface {
 		NewExternalIPAddress string,
 		err error,
 	)
+
+	GetGenericPortMappingEntryCtx(
+		ctx context.Context,
+		NewPortMappingIndex uint16,
+	) (NewRemoteHost string, NewExternalPort uint16, NewProtocol string, NewInternalPort uint16, NewInternalClient string, NewEnabled bool, NewPortMappingDescription string, NewLeaseDuration uint32, err error)
+}
+
+type PortMappingEntry struct {
+	ExternalPort  int
+	InternalPort  int
+	Protocol      string
+	InternalIP    string
+	Description   string
+	LeaseDuration uint32
+	Enabled       bool
 }
 
 // Client wraps the UPnP client and local IP for port forwarding.
@@ -90,6 +106,8 @@ func (u *Client) ForwardPorts(mappings []types.PortMapping) error {
 		err := u.addPortMapping(m)
 		if err != nil {
 			log.Printf("Failed to forward port %d/%s for %s: %v", m.ExternalPort, m.Protocol, m.Name, err)
+
+			return err
 		} else {
 			log.Printf("Successfully forwarded port %d/%s for %s", m.ExternalPort, m.Protocol, m.Name)
 		}
@@ -116,6 +134,40 @@ func (u *Client) addPortMapping(m types.PortMapping) error {
 
 func (u *Client) DeletePortMapping(externalPort int, protocol string) error {
 	return u.uPnPConnection.DeletePortMapping("", uint16(externalPort), protocol)
+}
+
+// ListPortMappings retrieves all active UPnP port mappings.
+func (c *Client) ListPortMappings() ([]PortMappingEntry, error) {
+	var mappings []PortMappingEntry
+	index := uint16(0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for {
+		_, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration, err := c.uPnPConnection.GetGenericPortMappingEntryCtx(ctx, index)
+		if err != nil {
+			if serr, ok := err.(*soap.SOAPFaultError); ok && serr.Detail.UPnPError.ErrorDescription == "SpecifiedArrayIndexInvalid" {
+				break
+			}
+
+			return nil, fmt.Errorf("failed to get port mapping at index %d: %v", index, err)
+		}
+
+		mappings = append(mappings, PortMappingEntry{
+			ExternalPort:  int(externalPort),
+			InternalPort:  int(internalPort),
+			Protocol:      protocol,
+			InternalIP:    internalClient,
+			Description:   description,
+			LeaseDuration: leaseDuration,
+			Enabled:       enabled,
+		})
+
+		index++
+	}
+
+	return mappings, nil
 }
 
 func discoverGateway(ctx context.Context) (UPnPConnection, error) {

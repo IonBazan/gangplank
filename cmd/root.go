@@ -76,7 +76,8 @@ func init() {
 	rootCmd.AddCommand(forwardCmd)
 	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(deleteCmd)
-	rootCmd.AddCommand(daemonCmd) // Add the new daemon command
+	rootCmd.AddCommand(daemonCmd)
+	rootCmd.AddCommand(listCmd)
 }
 
 // bindFlags binds each cobra flag to its associated viper configuration

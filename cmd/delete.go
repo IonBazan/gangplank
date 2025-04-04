@@ -9,7 +9,7 @@ import (
 
 var (
 	deleteCmd = &cobra.Command{
-		Use:   "delete <external>:<internal>/<protocol>",
+		Use:   "delete <external>/<protocol>",
 		Short: "Delete a single UPnP port mapping",
 		Long:  `Deletes a single port mapping rule directly from the UPnP gateway for debugging purposes. Format: <external>:<internal>/<protocol> (e.g., 8080:80/tcp). Note: internal port is ignored for deletion.`,
 		Args:  cobra.ExactArgs(1),
