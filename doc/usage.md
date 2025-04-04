@@ -88,4 +88,4 @@ These ports will be handled by Gangplank and forwarded to the specified internal
 
 ## Advanced Usage
 
-You can find more advanced usage examples in the [advanced usage documentation](doc/advanced.md).
+You can find more advanced usage examples in the [advanced usage documentation](advanced.md).

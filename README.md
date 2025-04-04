@@ -52,7 +52,21 @@ services:
     restart: unless-stopped
 ```
 
-## Usage examples
+## Usage
+
+Exposing a service is as easy as adding a label to your Docker container:
+Using `gangplank.forward="published"` will expose all ports from the container to the world on the same port numbers:
+
+```yaml
+services:
+  nginx:
+    image: nginx
+    ports:
+     - "80:80"
+     - "443:443"
+    labels:
+      gangplank.forward: "published" # Expose port 80 and 443 to the world
+```
 
 You can find more usage examples in the [usage documentation](doc/usage.md).
 
