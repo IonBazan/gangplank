@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	dockerevents "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
+
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
-	dockerevents "github.com/docker/docker/api/types/events"
-	"github.com/docker/docker/api/types/filters"
 )
 
 const (
@@ -21,8 +22,8 @@ const (
 // EventInspector defines the minimal interface for DockerEventPortProvider.
 type EventInspector interface {
 	ContainerLister
-	Events(ctx context.Context, options dockerevents.ListOptions) (<-chan dockerevents.Message, <-chan error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	Events(ctx context.Context, options client.EventsListOptions) client.EventsResult
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
 // DockerEventPortProvider emits mappings as containers start and stop.
@@ -75,13 +76,10 @@ func (d *DockerEventPortProvider) listenOnce(ctx context.Context, events PortEve
 	defer cancel()
 
 	// Subscribe before syncing so that no event falls between the two.
-	eventChan, errChan := d.dockerCli.Events(streamCtx, dockerevents.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("type", "container"),
-			filters.Arg("event", "start"),
-			filters.Arg("event", "stop"),
-			filters.Arg("event", "die"),
-		),
+	stream := d.dockerCli.Events(streamCtx, client.EventsListOptions{
+		Filters: make(client.Filters).
+			Add("type", string(dockerevents.ContainerEventType)).
+			Add("event", string(dockerevents.ActionStart), string(dockerevents.ActionStop), string(dockerevents.ActionDie)),
 	})
 
 	if err := d.sync(ctx, events, resync); err != nil {
@@ -90,7 +88,7 @@ func (d *DockerEventPortProvider) listenOnce(ctx context.Context, events PortEve
 
 	for {
 		select {
-		case event, ok := <-eventChan:
+		case event, ok := <-stream.Messages:
 			if !ok {
 				return true, errors.New("event stream closed")
 			}
@@ -100,7 +98,7 @@ func (d *DockerEventPortProvider) listenOnce(ctx context.Context, events PortEve
 			case dockerevents.ActionStop, dockerevents.ActionDie:
 				d.handleContainerStop(ctx, event.Actor.ID, events.Delete)
 			}
-		case err := <-errChan:
+		case err := <-stream.Err:
 			if err == nil {
 				err = errors.New("event stream closed")
 			}
@@ -148,24 +146,21 @@ func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChan
 }
 
 func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, containerID string, addCh chan<- types.PortMapping) {
-	info, err := d.dockerCli.ContainerInspect(ctx, containerID)
+	result, err := d.dockerCli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		log.Printf("Failed to inspect container %s: %v", shortID(containerID), err)
 		return
 	}
+	info := result.Container
 
 	var labels map[string]string
 	if info.Config != nil {
 		labels = info.Config.Labels
 	}
-	var name string
-	if info.ContainerJSONBase != nil {
-		name = info.Name
-	}
 
 	mappings := extractPortsFromContainer(container.Summary{
 		ID:     containerID,
-		Names:  []string{name},
+		Names:  []string{info.Name},
 		Labels: labels,
 		Ports:  portsFromInspect(info),
 	})

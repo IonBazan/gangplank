@@ -8,9 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	"github.com/IonBazan/gangplank/internal"
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -28,7 +29,7 @@ var (
 			if err != nil {
 				return err
 			}
-			defer dockerCli.Close()
+			defer func() { _ = dockerCli.Close() }()
 
 			gp := internal.NewGangplank(cfg, dockerCli)
 			ports, fetchErr := gp.GetPortMappings(ctx)

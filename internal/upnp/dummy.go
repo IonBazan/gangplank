@@ -5,8 +5,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/huin/goupnp/soap"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 type DeletedMapping struct {

@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 func TestLoadConfig(t *testing.T) {

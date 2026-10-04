@@ -1,0 +1,15 @@
+version: "2"
+
+linters:
+  enable:
+    - errorlint
+    - misspell
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/IonBazan/gangplank

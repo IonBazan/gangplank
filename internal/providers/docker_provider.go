@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/moby/moby/client"
+
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 )
 
 type ContainerLister interface {
-	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
+	ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error)
 }
 
 type DockerPortProvider struct {
@@ -49,15 +49,15 @@ type containerMappings struct {
 }
 
 func listContainerMappings(ctx context.Context, cli ContainerLister) ([]containerMappings, error) {
-	containers, err := cli.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(filters.Arg("status", "running")),
+	containers, err := cli.ContainerList(ctx, client.ContainerListOptions{
+		Filters: make(client.Filters).Add("status", "running"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	result := make([]containerMappings, 0, len(containers))
-	for _, ctr := range containers {
+	result := make([]containerMappings, 0, len(containers.Items))
+	for _, ctr := range containers.Items {
 		result = append(result, containerMappings{id: ctr.ID, mappings: extractPortsFromContainer(ctr)})
 	}
 

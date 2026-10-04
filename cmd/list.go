@@ -30,14 +30,14 @@ var listCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "External Port\tInternal Port\tProtocol\tInternal IP\tDescription\tLease Duration\tEnabled")
-		fmt.Fprintln(w, "-------------\t-------------\t--------\t-----------\t-----------\t--------------\t--------")
+		_, _ = fmt.Fprintln(w, "External Port\tInternal Port\tProtocol\tInternal IP\tDescription\tLease Duration\tEnabled")
+		_, _ = fmt.Fprintln(w, "-------------\t-------------\t--------\t-----------\t-----------\t--------------\t--------")
 		for _, mapping := range mappings {
 			leaseDuration := "Permanent"
 			if mapping.LeaseDuration > 0 {
 				leaseDuration = fmt.Sprintf("%d seconds", mapping.LeaseDuration)
 			}
-			fmt.Fprintf(w, "%d\t%d\t%s\t%s\t%s\t%s\t%t\n",
+			_, _ = fmt.Fprintf(w, "%d\t%d\t%s\t%s\t%s\t%s\t%t\n",
 				mapping.ExternalPort,
 				mapping.InternalPort,
 				mapping.Protocol,

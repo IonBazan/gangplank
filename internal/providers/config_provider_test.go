@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/IonBazan/gangplank/internal/config"
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestConfigPortProvider_GetPortMappings(t *testing.T) {

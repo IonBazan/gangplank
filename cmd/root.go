@@ -9,12 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/IonBazan/gangplank/internal/config"
-	"github.com/IonBazan/gangplank/internal/upnp"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	"github.com/IonBazan/gangplank/internal/config"
+	"github.com/IonBazan/gangplank/internal/upnp"
 )
 
 const banner = `
@@ -50,7 +51,7 @@ var (
 		return upnp.NewClient(ctx, localIP, gateway, ttl)
 	}
 	NewDockerClient = func() (*client.Client, error) {
-		return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+		return client.New(client.FromEnv)
 	}
 	rootCmd = &cobra.Command{
 		Use:          "gangplank",

@@ -3,17 +3,17 @@ package providers
 import (
 	"fmt"
 	"log"
-	"net"
 	"strconv"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
+
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
 )
 
 type ContainerInfo struct {
 	Labels        map[string]string
-	Ports         []container.Port
+	Ports         []container.PortSummary
 	ContainerName string
 	ID            string
 }
@@ -97,7 +97,7 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 // resolveContainerPort parses "[<external>:]<container port>[/<protocol>]" and maps
 // the external port to the host port Docker published the container port on.
 // When the external port is omitted, the container port number is used.
-func resolveContainerPort(spec string, ports []container.Port) (types.PortMapping, error) {
+func resolveContainerPort(spec string, ports []container.PortSummary) (types.PortMapping, error) {
 	mapping, err := types.ParsePortMapping(spec)
 	if err != nil {
 		return mapping, err
@@ -118,15 +118,8 @@ func resolveContainerPort(spec string, ports []container.Port) (types.PortMappin
 }
 
 // isForwardable reports whether the port is published on an address reachable from the LAN.
-func isForwardable(port container.Port) bool {
-	if port.PublicPort == 0 {
-		return false
-	}
-	if ip := net.ParseIP(port.IP); ip != nil && ip.IsLoopback() {
-		return false
-	}
-
-	return true
+func isForwardable(port container.PortSummary) bool {
+	return port.PublicPort != 0 && !port.IP.IsLoopback()
 }
 
 // dedupe drops repeated mappings (e.g. Docker reports both 0.0.0.0 and :: bindings).
@@ -153,23 +146,23 @@ func shortID(id string) string {
 }
 
 // portsFromInspect converts inspect port bindings to the summary format used by the label parser.
-func portsFromInspect(info container.InspectResponse) []container.Port {
+func portsFromInspect(info container.InspectResponse) []container.PortSummary {
 	if info.NetworkSettings == nil {
 		return nil
 	}
 
-	var ports []container.Port
+	var ports []container.PortSummary
 	for portProto, bindings := range info.NetworkSettings.Ports {
 		for _, binding := range bindings {
 			hostPort, err := strconv.Atoi(binding.HostPort)
 			if err != nil || hostPort <= 0 || hostPort > 65535 {
 				continue
 			}
-			ports = append(ports, container.Port{
+			ports = append(ports, container.PortSummary{
 				IP:          binding.HostIP,
-				PrivatePort: uint16(portProto.Int()),
+				PrivatePort: portProto.Num(),
 				PublicPort:  uint16(hostPort),
-				Type:        portProto.Proto(),
+				Type:        string(portProto.Proto()),
 			})
 		}
 	}

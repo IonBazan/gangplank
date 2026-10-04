@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 type MockDockerClient struct {
@@ -14,11 +16,11 @@ type MockDockerClient struct {
 	Err        error
 }
 
-func (m *MockDockerClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
+func (m *MockDockerClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	if m.Err != nil {
-		return nil, m.Err
+		return client.ContainerListResult{}, m.Err
 	}
-	return m.Containers, nil
+	return client.ContainerListResult{Items: m.Containers}, nil
 }
 
 func TestDockerPortProvider_GetPortMappings(t *testing.T) {
@@ -34,7 +36,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 				{
 					ID:    "nginx123",
 					Names: []string{"/nginx"},
-					Ports: []container.Port{
+					Ports: []container.PortSummary{
 						{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 					},
 					Labels: map[string]string{
@@ -53,7 +55,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 				{
 					ID:    "redis456",
 					Names: []string{"/redis"},
-					Ports: []container.Port{
+					Ports: []container.PortSummary{
 						{PublicPort: 6379, PrivatePort: 6379, Type: "tcp"},
 					},
 					Labels: map[string]string{
@@ -72,7 +74,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 				{
 					ID:    "pg789",
 					Names: []string{"/postgres"},
-					Ports: []container.Port{
+					Ports: []container.PortSummary{
 						{PublicPort: 5433, PrivatePort: 5432, Type: "tcp"}, // Different host port
 					},
 					Labels: map[string]string{

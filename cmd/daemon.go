@@ -9,8 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/IonBazan/gangplank/internal"
 	"github.com/spf13/cobra"
+
+	"github.com/IonBazan/gangplank/internal"
 )
 
 const (
@@ -45,7 +46,7 @@ var (
 			if err != nil {
 				return err
 			}
-			defer dockerCli.Close()
+			defer func() { _ = dockerCli.Close() }()
 			log.Printf("Using Docker daemon at %s", dockerCli.DaemonHost())
 
 			gp := internal.NewGangplank(cfg, dockerCli)

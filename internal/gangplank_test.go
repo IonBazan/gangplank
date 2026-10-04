@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/IonBazan/gangplank/internal/providers"
 	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/IonBazan/gangplank/internal/upnp"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type MockPortProvider struct {

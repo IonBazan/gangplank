@@ -5,8 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 func TestClient_ForwardPorts(t *testing.T) {

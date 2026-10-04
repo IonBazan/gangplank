@@ -3,16 +3,19 @@ package providers
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/events"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 type eventStream struct {
@@ -37,7 +40,7 @@ func newMockEventClient(streams int) *MockEventClient {
 	return m
 }
 
-func (m *MockEventClient) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+func (m *MockEventClient) Events(ctx context.Context, options client.EventsListOptions) client.EventsResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	defer func() { m.subscribe <- struct{}{} }()
@@ -48,29 +51,30 @@ func (m *MockEventClient) Events(ctx context.Context, options events.ListOptions
 		m.current = m.streams[0]
 		m.streams = m.streams[1:]
 	}
-	return m.current.msgs, m.current.errs
+	return client.EventsResult{Messages: m.current.msgs, Err: m.current.errs}
 }
 
-func (m *MockEventClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
+func (m *MockEventClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]container.Summary(nil), m.Running...), nil
+	return client.ContainerListResult{Items: append([]container.Summary(nil), m.Running...)}, nil
 }
 
-func (m *MockEventClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+func (m *MockEventClient) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if info, ok := m.Inspect[containerID]; ok {
-		return info, nil
+		return client.ContainerInspectResult{Container: info}, nil
 	}
-	return container.InspectResponse{}, assert.AnError
+	return client.ContainerInspectResult{}, assert.AnError
 }
 
-func inspectResponse(id, name string, labels map[string]string, ports nat.PortMap) container.InspectResponse {
+func inspectResponse(id, name string, labels map[string]string, ports network.PortMap) container.InspectResponse {
 	return container.InspectResponse{
-		ContainerJSONBase: &container.ContainerJSONBase{ID: id, Name: "/" + name},
-		NetworkSettings:   &container.NetworkSettings{NetworkSettingsBase: container.NetworkSettingsBase{Ports: ports}},
-		Config:            &container.Config{Labels: labels},
+		ID:              id,
+		Name:            "/" + name,
+		NetworkSettings: &container.NetworkSettings{Ports: ports},
+		Config:          &container.Config{Labels: labels},
 	}
 }
 
@@ -117,14 +121,14 @@ func TestDockerEventPortProvider_Listen(t *testing.T) {
 		{
 			name: "Nginx start with published ports",
 			inspect: inspectResponse("nginx1234567890", "nginx", map[string]string{labelForward: "published"},
-				nat.PortMap{"80/tcp": {{HostIP: "0.0.0.0", HostPort: "8080"}, {HostIP: "::", HostPort: "8080"}}}),
+				network.PortMap{network.MustParsePort("80/tcp"): {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}, {HostIP: netip.MustParseAddr("::"), HostPort: "8080"}}}),
 			events:  []events.Action{events.ActionStart},
 			wantAdd: []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"}},
 		},
 		{
 			name: "Redis start, stop and die deletes once",
 			inspect: inspectResponse("redis4567890123", "redis", map[string]string{labelForward: "6379:6379/tcp"},
-				nat.PortMap{"6379/tcp": {{HostPort: "6379"}}}),
+				network.PortMap{network.MustParsePort("6379/tcp"): {{HostPort: "6379"}}}),
 			events:     []events.Action{events.ActionStart, events.ActionDie, events.ActionStop},
 			wantAdd:    []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
 			wantDelete: []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
@@ -132,7 +136,7 @@ func TestDockerEventPortProvider_Listen(t *testing.T) {
 		{
 			name: "Postgres start with container-referenced label",
 			inspect: inspectResponse("pg7890123456789", "postgres", map[string]string{labelForwardContainer: "5432/tcp"},
-				nat.PortMap{"5432/tcp": {{HostPort: "5433"}}}),
+				network.PortMap{network.MustParsePort("5432/tcp"): {{HostPort: "5433"}}}),
 			events:  []events.Action{events.ActionStart},
 			wantAdd: []types.PortMapping{{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"}},
 		},
@@ -178,7 +182,7 @@ func TestDockerEventPortProvider_TracksContainersRunningAtStartup(t *testing.T) 
 		ID:     "web123456789012",
 		Names:  []string{"/web"},
 		Labels: map[string]string{labelForward: "published"},
-		Ports:  []container.Port{{PublicPort: 80, PrivatePort: 80, Type: "tcp"}},
+		Ports:  []container.PortSummary{{PublicPort: 80, PrivatePort: 80, Type: "tcp"}},
 	}}
 	provider := NewDockerEventPortProvider(mockClient)
 

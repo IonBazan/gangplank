@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/spf13/cobra"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 var (
