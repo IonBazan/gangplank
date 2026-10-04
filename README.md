@@ -1,4 +1,4 @@
-![logo](logo.png)
+<p align="center"><img src="logo.svg" alt="Gangplank logo" width="400"></p>
 
 # Gangplank
 
