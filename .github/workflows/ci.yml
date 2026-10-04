@@ -1,97 +1,132 @@
-name: Test with Coverage
+name: CI
 
 on:
-  push: ~
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
   pull_request: ~
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14
+
   test:
     name: Test with Coverage
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: stable
 
-      - name: Install dependencies
-        run: go mod download
+      - name: Check go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       - name: Run tests
-        run: go test ./... -v -coverprofile=coverage.out -covermode=atomic
+        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
 
       - name: Show coverage
         run: go tool cover -func=coverage.out
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.out
 
-  publish:
-    name: Publish Docker images
-    if: |
-      github.repository == 'IonBazan/gangplank' &&
-      (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
-      )
-    needs: [ test ]
+  vulncheck:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  docker:
+    name: Docker image
+    needs: [ lint, test ]
     permissions:
-      actions: read
       contents: read
       packages: write
     runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ github.repository == 'IonBazan/gangplank' && github.event_name == 'push' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
-          flavor: |
-            latest=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
           images: |
-            ghcr.io/IonBazan/gangplank
+            ghcr.io/ionbazan/gangplank
             ionbazan/gangplank
           tags: |
             type=ref,event=pr
             type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
             type=semver,pattern=v{{major}}.{{minor}}
             type=semver,pattern=v{{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+        if: env.PUBLISH == 'true'
 
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        if: env.PUBLISH == 'true'
         with:
           username: ionbazan
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
+        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
-          username: IonBazan
+          username: ${{ github.actor }}
           password: ${{ github.token }}
 
       - name: Short commit
         id: shortcommit
-        run: echo "::set-output name=value::$(git rev-parse --short HEAD)"
+        run: echo "value=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push final image
-        uses: docker/build-push-action@v6
+      - name: Build (and push on main and tags)
+        uses: docker/build-push-action@v7
         with:
-          platforms: linux/amd64,linux/386,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le
+          context: .
+          platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/386,linux/arm64,linux/arm/v6,linux/arm/v7,linux/ppc64le' || 'linux/amd64' }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             COMMIT=${{ steps.shortcommit.outputs.value }}
             VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
           tags: ${{ steps.meta.outputs.tags }}
-          push: true
+          push: ${{ env.PUBLISH == 'true' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

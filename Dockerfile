@@ -1,12 +1,10 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 ARG VERSION=unknown
 ARG CREATED="an unknown date"
 ARG COMMIT=unknown
 
 WORKDIR /app
-
-RUN apk add --no-cache git
 
 COPY go.mod go.sum ./
 RUN go mod download

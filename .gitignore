@@ -2,4 +2,4 @@
 /config.yaml
 /config.yml
 /*.cov
-/coverage.*
+/coverage.*/dist
