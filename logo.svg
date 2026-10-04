@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600" role="img" aria-label="Gangplank">
   <defs>
     <clipPath id="hull"><path d="M330,258 Q470,272 616,206 Q614,294 566,334 Q470,358 382,344 Q338,334 330,258 Z"/></clipPath>
-    <clipPath id="tile"><rect x="24" y="24" width="552" height="552" rx="120"/></clipPath>
+    <clipPath id="tile"><circle cx="300" cy="300" r="276"/></clipPath>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#BFE5FD"/>
       <stop offset="1" stop-color="#EEF8FF"/>
     </linearGradient>
   </defs>
-  <rect x="24" y="24" width="552" height="552" rx="120" fill="url(#sky)"/>
+  <circle cx="300" cy="300" r="276" fill="url(#sky)"/>
   <g clip-path="url(#tile)" stroke="#0B2545" stroke-linejoin="round" stroke-linecap="round">
     <path d="M110,122 a22,22 0 0 1 32,-24 a30,30 0 0 1 56,7 a20,20 0 0 1 17,34 L110,139 a8.5,8.5 0 0 1 0,-17 Z" fill="#FFFFFF" stroke-width="7"/>
     <path d="M330,176 a14,14 0 0 1 21,-16 a20,20 0 0 1 37,5 a13,13 0 0 1 11,22 L330,187 a5.5,5.5 0 0 1 0,-11 Z" fill="#FFFFFF" stroke-width="6"/>
@@ -120,5 +120,5 @@
     </g>
   </g>
   </g>
-  <rect x="24" y="24" width="552" height="552" rx="120" fill="none" stroke="#0B2545" stroke-width="14"/>
+  <circle cx="300" cy="300" r="276" fill="none" stroke="#0B2545" stroke-width="14"/>
 </svg>
