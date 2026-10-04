@@ -99,7 +99,8 @@ func initConfig() {
 	viper.SetEnvPrefix(envPrefix)
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
-	cfg, err := config.LoadConfig(configFile)
+	var err error
+	cfg, err = config.LoadConfig(configFile)
 	if err != nil && configFile != "" {
 		log.Fatalf("error loading config file: %v", err)
 	}
@@ -107,6 +108,10 @@ func initConfig() {
 	if cfg != nil {
 		if cfg.RefreshInterval > 0 {
 			viper.SetDefault("refresh-interval", cfg.RefreshInterval)
+		}
+
+		if cfg.Gateway != "" {
+			viper.SetDefault("gateway", cfg.Gateway)
 		}
 
 		if cfg.LocalIP != "" {
