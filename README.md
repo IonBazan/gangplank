@@ -5,6 +5,8 @@
 [![CI](https://github.com/IonBazan/gangplank/actions/workflows/ci.yml/badge.svg)](https://github.com/IonBazan/gangplank/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/IonBazan/gangplank)](https://github.com/IonBazan/gangplank/releases)
 [![Docker Pulls](https://img.shields.io/docker/pulls/ionbazan/gangplank)](https://hub.docker.com/r/ionbazan/gangplank)
+[![Docker Image Size](https://img.shields.io/docker/image-size/ionbazan/gangplank/latest)](https://hub.docker.com/r/ionbazan/gangplank/tags)
+[![License](https://img.shields.io/github/license/IonBazan/gangplank)](LICENSE)
 
 Gangplank opens ports on your router for your Docker containers.
 Add a label to a container and Gangplank asks your router, over UPnP, to forward its ports.
