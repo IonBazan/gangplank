@@ -1,8 +1,8 @@
+FROM golang:1.24-alpine AS builder
+
 ARG VERSION=unknown
 ARG CREATED="an unknown date"
 ARG COMMIT=unknown
-
-FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -13,11 +13,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w \
-	-X 'cmd.version=$VERSION' \
-	-X 'cmd.created=$CREATED' \
-	-X 'cmd.commit=$COMMIT' \
-    " -o gangplank
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w \
+	-X 'github.com/IonBazan/gangplank/cmd.version=${VERSION}' \
+	-X 'github.com/IonBazan/gangplank/cmd.created=${CREATED}' \
+	-X 'github.com/IonBazan/gangplank/cmd.commit=${COMMIT}' \
+	" -o gangplank
 
 FROM alpine:3
 
