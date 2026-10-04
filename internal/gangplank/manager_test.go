@@ -21,7 +21,7 @@ type MockPortProvider struct {
 	Err   error
 }
 
-func (m *MockPortProvider) GetPortMappings(ctx context.Context) ([]portmap.Mapping, error) {
+func (m *MockPortProvider) GetPortMappings(context.Context) ([]portmap.Mapping, error) {
 	return m.Ports, m.Err
 }
 
@@ -254,7 +254,7 @@ type failingForwarder struct {
 	listErr error
 }
 
-func (f failingForwarder) ListPortMappings(ctx context.Context) ([]upnp.PortMappingEntry, error) {
+func (f failingForwarder) ListPortMappings(context.Context) ([]upnp.PortMappingEntry, error) {
 	return nil, f.listErr
 }
 

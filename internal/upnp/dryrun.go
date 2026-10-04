@@ -2,7 +2,8 @@ package upnp
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/huin/goupnp/soap"
@@ -31,12 +32,12 @@ func (dryRunConnection) GetExternalIPAddressCtx(context.Context) (string, error)
 }
 
 func (dryRunConnection) AddPortMappingCtx(_ context.Context, _ string, ext uint16, protocol string, internal uint16, client string, _ bool, description string, lease uint32) error {
-	log.Printf("[dry run] Would add %d/%s -> %s:%d (%s, lease %ds)", ext, protocol, client, internal, description, lease)
+	slog.Info("Dry run: would add port mapping", "port", fmt.Sprintf("%d/%s", ext, protocol), "target", fmt.Sprintf("%s:%d", client, internal), "description", description, "lease_seconds", lease)
 	return nil
 }
 
 func (dryRunConnection) DeletePortMappingCtx(_ context.Context, _ string, ext uint16, protocol string) error {
-	log.Printf("[dry run] Would delete %d/%s", ext, protocol)
+	slog.Info("Dry run: would delete port mapping", "port", fmt.Sprintf("%d/%s", ext, protocol))
 	return nil
 }
 

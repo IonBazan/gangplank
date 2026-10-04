@@ -1,8 +1,11 @@
 package gangplank
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,7 +82,7 @@ func TestDaemon_KeepsMappingsOnExitByDefault(t *testing.T) {
 func TestDaemon_RetriesGatewayUntilAvailable(t *testing.T) {
 	conn := &upnptest.Connection{}
 	var attempts atomic.Int32
-	connect := func(ctx context.Context) (Gateway, error) {
+	connect := func(context.Context) (Gateway, error) {
 		if attempts.Add(1) < 3 {
 			return nil, errors.New("router is booting")
 		}
@@ -119,4 +122,23 @@ func TestDaemon_PollsEvents(t *testing.T) {
 		return len(deleted) == 1
 	}, waitTimeout, 5*time.Millisecond)
 	stop()
+}
+
+func TestDaemon_LogsOnlyChanges(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	d := NewDaemon(&Manager{}, nil, DaemonOptions{})
+	web := portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}
+	game := portmap.Mapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "game"}
+
+	d.logChanges([]portmap.Mapping{web})
+	d.logChanges([]portmap.Mapping{web})
+	d.logChanges([]portmap.Mapping{game})
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "port=80/TCP internal_port=80 name=web"), "unchanged ports are logged once")
+	assert.Contains(t, logs.String(), `msg="Port no longer requested" port=80/TCP`)
+	assert.Contains(t, logs.String(), "port=25565/TCP")
 }

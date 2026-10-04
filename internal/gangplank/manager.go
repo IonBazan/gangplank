@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -67,7 +67,7 @@ func (mgr *Manager) gateway() Gateway {
 // A failing provider does not drop the others' mappings. When several sources
 // claim the same external port and protocol, the first one wins.
 func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, error) {
-	log.Println("Fetching port mappings...")
+	slog.Debug("Fetching port mappings")
 	allPorts := []portmap.Mapping{}
 	owners := map[string]string{}
 	var errs []error
@@ -75,14 +75,13 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 	for _, portProvider := range mgr.portProviders {
 		ports, err := portProvider.GetPortMappings(ctx)
 		if err != nil {
-			log.Printf("Error fetching port mappings: %v", err)
 			errs = append(errs, err)
 		}
 		for _, p := range ports {
 			p = p.Normalize()
 			if owner, taken := owners[p.Key()]; taken {
 				if owner != p.Name {
-					log.Printf("Port %s is requested by both %q and %q, keeping %q", p.Key(), owner, p.Name, owner)
+					slog.Warn("Port requested twice, keeping the first", "port", p.Key(), "kept", owner, "ignored", p.Name)
 				}
 				continue
 			}
@@ -91,7 +90,7 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 		}
 	}
 
-	log.Printf("Fetched %d port mappings", len(allPorts))
+	slog.Debug("Fetched port mappings", "count", len(allPorts))
 	return allPorts, errors.Join(errs...)
 }
 
@@ -100,7 +99,7 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 func (mgr *Manager) Sync(ctx context.Context, desired []portmap.Mapping, prune bool) error {
 	gw := mgr.gateway()
 	if gw == nil {
-		log.Println("UPnP client is not initialized, skipping port forwarding.")
+		slog.Debug("No UPnP gateway yet, skipping port forwarding")
 		return nil
 	}
 
@@ -140,7 +139,7 @@ func (mgr *Manager) prune(ctx context.Context, gw Gateway, keep map[string]portm
 			errs = append(errs, fmt.Errorf("prune %s: %w", key, err))
 			continue
 		}
-		log.Printf("Pruned stale port mapping %s (%s)", key, e.Description)
+		slog.Info("Pruned stale port mapping", "port", key, "description", e.Description)
 	}
 
 	return errors.Join(errs...)
@@ -166,7 +165,7 @@ func (mgr *Manager) Cleanup(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("delete %s: %w", m.Key(), err))
 			continue
 		}
-		log.Printf("Deleted port mapping %s for %s", m.Key(), m.Name)
+		slog.Info("Deleted port mapping", "port", m.Key(), "name", m.Name)
 	}
 
 	return errors.Join(errs...)
@@ -205,7 +204,7 @@ func (mgr *Manager) claim(m portmap.Mapping) bool {
 	defer mgr.mu.Unlock()
 
 	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
-		log.Printf("Port %s is already used by %q, ignoring %q", m.Key(), owner.Name, m.Name)
+		slog.Warn("Port already in use, ignoring", "port", m.Key(), "owner", owner.Name, "ignored", m.Name)
 		return false
 	}
 	if mgr.forwarded == nil {
@@ -221,7 +220,7 @@ func (mgr *Manager) release(m portmap.Mapping) bool {
 	defer mgr.mu.Unlock()
 
 	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
-		log.Printf("Port %s is still used by %q, keeping it", m.Key(), owner.Name)
+		slog.Info("Port still in use, keeping it", "port", m.Key(), "owner", owner.Name)
 		return false
 	}
 	delete(mgr.forwarded, m.Key())
@@ -231,17 +230,17 @@ func (mgr *Manager) release(m portmap.Mapping) bool {
 func (mgr *Manager) add(ctx context.Context, m portmap.Mapping) {
 	gw := mgr.gateway()
 	if gw == nil {
-		log.Println("UPnP client is not initialized, skipping port forwarding.")
+		slog.Debug("No UPnP gateway yet, skipping port forwarding")
 		return
 	}
 
 	m = m.Normalize()
-	log.Printf("New container port mapping (Container: %s): External=%d, Internal=%d, Protocol=%s", m.Name, m.ExternalPort, m.InternalPort, m.Protocol)
+	slog.Info("Forwarding port for started container", "port", m.Key(), "internal_port", m.InternalPort, "container", m.Name)
 	if !mgr.claim(m) {
 		return
 	}
 	if err := gw.ForwardPorts(ctx, []portmap.Mapping{m}); err != nil {
-		log.Printf("Error forwarding new port: %v", err)
+		slog.Error("Failed to forward port", "port", m.Key(), "error", err)
 	}
 }
 
@@ -256,8 +255,8 @@ func (mgr *Manager) delete(ctx context.Context, m portmap.Mapping) {
 		return
 	}
 	if err := gw.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
-		log.Printf("Failed to delete port mapping %s for %s: %v", m.Key(), m.Name, err)
+		slog.Error("Failed to delete port mapping", "port", m.Key(), "container", m.Name, "error", err)
 	} else {
-		log.Printf("Deleted port mapping %s for %s", m.Key(), m.Name)
+		slog.Info("Deleted port mapping", "port", m.Key(), "name", m.Name)
 	}
 }

@@ -16,7 +16,7 @@ type MockDockerClient struct {
 	Err        error
 }
 
-func (m *MockDockerClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
+func (m *MockDockerClient) ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error) {
 	if m.Err != nil {
 		return client.ContainerListResult{}, m.Err
 	}

@@ -2,7 +2,7 @@ package providers
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -59,7 +59,7 @@ func parseLabel(label string, info containerInfo, parse func(spec string) (portm
 
 		mapping, err := parse(part)
 		if err != nil {
-			log.Printf("Invalid port mapping %s for container %s: %v", part, shortID(info.id), err)
+			slog.Warn("Invalid port mapping in label", "entry", part, "container", info.name, "error", err)
 			continue
 		}
 		mapping.Name = info.name

@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,4 +123,55 @@ func TestSettings_Errors(t *testing.T) {
 func TestEnvVarName(t *testing.T) {
 	assert.Equal(t, "GANGPLANK_REFRESH_INTERVAL", envVarName("refresh-interval"))
 	assert.Equal(t, "GANGPLANK_DRY_RUN", envVarName("dry-run"))
+}
+
+func TestLogging(t *testing.T) {
+	tests := []struct {
+		args    []string
+		wantErr string
+	}{
+		{args: []string{"--log-level", "debug", "--log-format", "json"}},
+		{args: []string{"--log-level", "WARN"}},
+		{args: []string{"--log-level", "loud"}, wantErr: `invalid log level "loud"`},
+		{args: []string{"--log-format", "xml"}, wantErr: `invalid log format "xml"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			_, err := settingsOf(t, tt.args...)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLogging_WritesToStderr(t *testing.T) {
+	a := newApp()
+	a.newDocker = func() (*client.Client, error) { return nil, errStop }
+
+	var out, logs bytes.Buffer
+	root := a.rootCmd()
+	root.SetOut(&out)
+	root.SetErr(&logs)
+	root.SetArgs([]string{"daemon", "--log-format", "json"})
+	assert.ErrorIs(t, root.Execute(), errStop)
+
+	assert.Empty(t, out.String())
+	assert.Contains(t, logs.String(), banner, "the banner is shown for the daemon")
+	assert.Contains(t, logs.String(), `"msg":"Starting Gangplank daemon"`)
+}
+
+func TestBannerOnlyForDaemon(t *testing.T) {
+	a := newApp()
+	var out, logs bytes.Buffer
+	root := a.rootCmd()
+	root.SetOut(&out)
+	root.SetErr(&logs)
+	root.SetArgs([]string{"list", "--dry-run"})
+	require.NoError(t, root.Execute())
+
+	assert.NotContains(t, logs.String(), banner)
 }

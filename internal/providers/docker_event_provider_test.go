@@ -50,7 +50,7 @@ func newMockEventClient(streams int) *MockEventClient {
 	return m
 }
 
-func (m *MockEventClient) Events(ctx context.Context, options client.EventsListOptions) client.EventsResult {
+func (m *MockEventClient) Events(context.Context, client.EventsListOptions) client.EventsResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	defer func() { m.subscribe <- struct{}{} }()
@@ -64,7 +64,7 @@ func (m *MockEventClient) Events(ctx context.Context, options client.EventsListO
 	return client.EventsResult{Messages: m.current.msgs, Err: m.current.errs}
 }
 
-func (m *MockEventClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
+func (m *MockEventClient) ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	defer func() {
@@ -81,7 +81,7 @@ func (m *MockEventClient) ContainerList(ctx context.Context, options client.Cont
 	return client.ContainerListResult{Items: append([]container.Summary(nil), m.Running...)}, nil
 }
 
-func (m *MockEventClient) ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+func (m *MockEventClient) ContainerInspect(_ context.Context, containerID string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if info, ok := m.Inspect[containerID]; ok {

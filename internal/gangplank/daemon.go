@@ -2,7 +2,7 @@ package gangplank
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -30,6 +30,8 @@ type Daemon struct {
 
 	retryInterval   time.Duration
 	shutdownTimeout time.Duration
+	// last is the set of ports from the previous refresh, so only changes are logged.
+	last map[string]portmap.Mapping
 }
 
 func NewDaemon(manager *Manager, connect func(ctx context.Context) (Gateway, error), opts DaemonOptions) *Daemon {
@@ -58,12 +60,12 @@ func (d *Daemon) Run(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
-			log.Println("Shutting down...")
+			slog.Info("Shutting down")
 			wg.Wait()
 			d.shutdown()
 			return
 		case <-time.After(wait):
-			log.Printf("Refreshing port mappings...")
+			slog.Debug("Refreshing port mappings")
 			d.refresh(ctx)
 		}
 	}
@@ -76,11 +78,11 @@ func (d *Daemon) refresh(ctx context.Context) {
 
 	ports, err := d.manager.GetPortMappings(ctx)
 	if err != nil {
-		log.Printf("Some port mappings could not be fetched: %v", err)
+		slog.Warn("Some port mappings could not be fetched", "error", err)
 	}
-	LogMappings(ports)
+	d.logChanges(ports)
 	if err := d.manager.Sync(ctx, ports, d.opts.Prune); err != nil {
-		log.Printf("Some port mappings could not be applied: %v", err)
+		slog.Error("Some port mappings could not be applied", "error", err)
 	}
 }
 
@@ -92,11 +94,11 @@ func (d *Daemon) ensureGateway(ctx context.Context) bool {
 
 	gateway, err := d.connect(ctx)
 	if err != nil {
-		log.Printf("Failed to initialize UPnP client: %v, retrying later", err)
+		slog.Warn("Failed to connect to UPnP gateway, retrying later", "error", err)
 		return false
 	}
 
-	log.Printf("UPnP client initialized with local IP: %s", gateway.InternalIP())
+	slog.Info("Connected to UPnP gateway", "local_ip", gateway.InternalIP())
 	d.manager.SetGateway(gateway)
 	return true
 }
@@ -109,16 +111,26 @@ func (d *Daemon) shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), d.shutdownTimeout)
 	defer cancel()
 	if err := d.manager.Cleanup(ctx); err != nil {
-		log.Printf("Failed to clean up port mappings: %v", err)
+		slog.Error("Failed to clean up port mappings", "error", err)
 	}
 }
 
-func LogMappings(ports []portmap.Mapping) {
+func (d *Daemon) logChanges(ports []portmap.Mapping) {
+	current := make(map[string]portmap.Mapping, len(ports))
 	for _, p := range ports {
-		if p.Name != "" {
-			log.Printf("Port Mapping (Container: %s): External=%d, Internal=%d, Protocol=%s", p.Name, p.ExternalPort, p.InternalPort, p.Protocol)
-		} else {
-			log.Printf("Port Mapping: External=%d, Internal=%d, Protocol=%s", p.ExternalPort, p.InternalPort, p.Protocol)
+		current[p.Key()] = p
+		if _, ok := d.last[p.Key()]; !ok {
+			LogMapping(p)
 		}
 	}
+	for key, p := range d.last {
+		if _, ok := current[key]; !ok {
+			slog.Info("Port no longer requested", "port", key, "name", p.Name)
+		}
+	}
+	d.last = current
+}
+
+func LogMapping(p portmap.Mapping) {
+	slog.Info("Forwarding port", "port", p.Key(), "internal_port", p.InternalPort, "name", p.Name)
 }

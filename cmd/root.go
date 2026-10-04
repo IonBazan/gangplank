@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -36,6 +38,8 @@ type options struct {
 	localIP    string
 	gateway    string
 	ttl        time.Duration
+	logLevel   string
+	logFormat  string
 
 	poll            bool
 	cleanupOnStop   bool
@@ -71,10 +75,6 @@ func (a *app) defaultGateway(ctx context.Context) (*upnp.Client, error) {
 }
 
 func Execute() {
-	// Keep stdout clean so command output can be piped.
-	fmt.Fprint(os.Stderr, banner)
-	fmt.Fprintf(os.Stderr, "Running version %s built on %s (commit %s)\n", version, created, commit)
-
 	if err := newApp().rootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
@@ -88,7 +88,10 @@ func (a *app) rootCmd() *cobra.Command {
 		Version:      fmt.Sprintf("%s (commit: %s, created: %s)", version, commit, created),
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
-			return a.loadSettings(cmd.Flags())
+			if err := a.loadSettings(cmd.Flags()); err != nil {
+				return err
+			}
+			return a.setupLogging(cmd.ErrOrStderr())
 		},
 	}
 
@@ -98,6 +101,8 @@ func (a *app) rootCmd() *cobra.Command {
 	flags.StringVar(&a.opts.localIP, "local-ip", "", "Local IP address to use for UPnP (default: auto-detected)")
 	flags.StringVar(&a.opts.gateway, "gateway", "", "UPnP gateway description URL, e.g. http://192.168.1.1:5000/rootDesc.xml (default: auto-detected)")
 	flags.DurationVar(&a.opts.ttl, "ttl", upnp.DefaultLeaseDuration, "UPnP lease duration")
+	flags.StringVar(&a.opts.logLevel, "log-level", "info", "Log level: debug, info, warn or error")
+	flags.StringVar(&a.opts.logFormat, "log-format", "text", "Log format: text or json")
 
 	root.AddCommand(a.forwardCmd(), a.addCmd(), a.deleteCmd(), a.daemonCmd(), a.listCmd())
 
@@ -153,6 +158,28 @@ func setFromEnv(flags *pflag.FlagSet, f *pflag.Flag) error {
 	if err := flags.Set(f.Name, value); err != nil {
 		return fmt.Errorf("invalid %s: %w", name, err)
 	}
+
+	return nil
+}
+
+// Logs go to stderr, so command output (e.g. list) can be piped.
+func (a *app) setupLogging(w io.Writer) error {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(a.opts.logLevel)); err != nil {
+		return fmt.Errorf("invalid log level %q: use debug, info, warn or error", a.opts.logLevel)
+	}
+
+	handlerOpts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	switch a.opts.logFormat {
+	case "text":
+		handler = slog.NewTextHandler(w, handlerOpts)
+	case "json":
+		handler = slog.NewJSONHandler(w, handlerOpts)
+	default:
+		return fmt.Errorf("invalid log format %q: use text or json", a.opts.logFormat)
+	}
+	slog.SetDefault(slog.New(handler))
 
 	return nil
 }

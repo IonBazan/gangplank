@@ -3,7 +3,8 @@ package cmd
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"os/signal"
 	"syscall"
 	"time"
@@ -20,23 +21,25 @@ func (a *app) daemonCmd() *cobra.Command {
 		Long:  `Runs Gangplank as a daemon, listening for container events and refreshing port mappings at intervals.`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, _ = fmt.Fprint(cmd.ErrOrStderr(), banner)
+
 			if a.opts.refreshInterval <= 0 {
 				return errors.New("--refresh-interval must be greater than 0")
 			}
 			if a.opts.ttl > 0 && a.opts.refreshInterval >= a.opts.ttl {
-				log.Printf("Warning: refresh interval (%s) is not shorter than the lease TTL (%s); mappings may expire between refreshes", a.opts.refreshInterval, a.opts.ttl)
+				slog.Warn("Refresh interval is not shorter than the lease TTL, mappings may expire between refreshes", "refresh_interval", a.opts.refreshInterval, "ttl", a.opts.ttl)
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			log.Println("Starting Gangplank daemon...")
+			slog.Info("Starting Gangplank daemon", "version", version, "commit", commit)
 			dockerCli, err := a.newDocker()
 			if err != nil {
 				return err
 			}
 			defer func() { _ = dockerCli.Close() }()
-			log.Printf("Using Docker daemon at %s", dockerCli.DaemonHost())
+			slog.Info("Using Docker", "host", dockerCli.DaemonHost())
 
 			connect := func(ctx context.Context) (gangplank.Gateway, error) {
 				gateway, err := a.connectGateway(ctx)

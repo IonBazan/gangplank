@@ -11,6 +11,8 @@ These options work with every command:
 | `--gateway` | URL of your router's UPnP description, for example `http://192.168.1.1:5000/rootDesc.xml`. By default, Gangplank finds the router on its own. |
 | `--ttl` | How long each mapping lasts before it expires. Default: `1h`. If your router only accepts permanent mappings, Gangplank notices and switches to them. |
 | `--dry-run` | Don't talk to the router. Only print what would be done. |
+| `--log-level` | How much to log: `debug`, `info` (default), `warn` or `error`. |
+| `--log-format` | `text` (default) or `json`, for log collectors. |
 
 These options are for the `daemon` command:
 

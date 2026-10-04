@@ -86,7 +86,7 @@ type permanentOnlyConnection struct {
 	leases []uint32
 }
 
-func (c *permanentOnlyConnection) AddPortMappingCtx(ctx context.Context, host string, ext uint16, proto string, internal uint16, client string, enabled bool, desc string, lease uint32) error {
+func (c *permanentOnlyConnection) AddPortMappingCtx(_ context.Context, _ string, _ uint16, _ string, _ uint16, _ string, _ bool, _ string, lease uint32) error {
 	c.leases = append(c.leases, lease)
 	if lease != 0 {
 		return upnptest.UPnPError(errCodeOnlyPermanentLeasesSupported, "OnlyPermanentLeasesSupported")
@@ -153,7 +153,7 @@ type failingListConnection struct {
 	err error
 }
 
-func (c *failingListConnection) GetGenericPortMappingEntryCtx(ctx context.Context, index uint16) (string, uint16, string, uint16, string, bool, string, uint32, error) {
+func (c *failingListConnection) GetGenericPortMappingEntryCtx(_ context.Context, index uint16) (string, uint16, string, uint16, string, bool, string, uint32, error) {
 	if index == 0 {
 		return "", 80, "TCP", 80, "192.168.1.100", true, "first", 0, nil
 	}

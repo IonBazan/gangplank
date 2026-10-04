@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -25,7 +25,7 @@ func (a *app) listCmd() *cobra.Command {
 			}
 
 			if len(mappings) == 0 {
-				log.Println("No active UPnP port mappings found.")
+				slog.Info("No active UPnP port mappings found")
 				return nil
 			}
 
