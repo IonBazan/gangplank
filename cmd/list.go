@@ -13,23 +13,22 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all active UPnP port mappings",
 	Long:  `Retrieves and displays all active UPnP port mappings from the gateway, including external port, internal port, protocol, internal IP, description, and lease duration.`,
-	Args:  cobra.NoArgs, // No arguments required
-	Run: func(cmd *cobra.Command, args []string) {
-		upnpClient, err := SetupUPnPClient()
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		upnpClient, err := SetupUPnPClient(cmd.Context())
 		if err != nil {
-			log.Fatalf("Failed to initialize UPnP client: %v", err)
+			return err
 		}
-		mappings, err := upnpClient.ListPortMappings()
+		mappings, err := upnpClient.ListPortMappings(cmd.Context())
 		if err != nil {
-			log.Fatalf("Failed to list port mappings: %v", err)
+			return fmt.Errorf("failed to list port mappings: %w", err)
 		}
 
 		if len(mappings) == 0 {
 			log.Println("No active UPnP port mappings found.")
-			return
+			return nil
 		}
 
-		fmt.Println("Active UPnP Port Mappings:")
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "External Port\tInternal Port\tProtocol\tInternal IP\tDescription\tLease Duration\tEnabled")
 		fmt.Fprintln(w, "-------------\t-------------\t--------\t-----------\t-----------\t--------------\t--------")
@@ -48,9 +47,6 @@ var listCmd = &cobra.Command{
 				mapping.Enabled,
 			)
 		}
-		w.Flush()
+		return w.Flush()
 	},
-}
-
-func init() {
 }

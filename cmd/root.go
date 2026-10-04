@@ -1,17 +1,20 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"github.com/IonBazan/gangplank/internal/config"
-	"github.com/IonBazan/gangplank/internal/upnp"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"log"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/IonBazan/gangplank/internal/config"
+	"github.com/IonBazan/gangplank/internal/upnp"
+	"github.com/docker/docker/client"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 )
 
 const banner = `
@@ -39,27 +42,31 @@ var (
 	localIP         string
 	gateway         string
 	ttl             time.Duration
-	SetupUPnPClient = func() (*upnp.Client, error) {
+	SetupUPnPClient = func(ctx context.Context) (*upnp.Client, error) {
 		if dryRun {
 			return upnp.NewDummyClient(ttl), nil
 		}
 
-		return upnp.NewClient(localIP, gateway, ttl)
+		return upnp.NewClient(ctx, localIP, gateway, ttl)
+	}
+	NewDockerClient = func() (*client.Client, error) {
+		return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	}
 	rootCmd = &cobra.Command{
-		Use:     "gangplank",
-		Short:   "Gangplank manages port mappings with UPnP",
-		Long:    `Gangplank is a CLI tool to fetch port mappings from various sources and forward them via UPnP.`,
-		Version: fmt.Sprintf("%s (commit: %s, created: %s)", version, commit, created),
+		Use:          "gangplank",
+		Short:        "Gangplank manages port mappings with UPnP",
+		Long:         `Gangplank is a CLI tool to fetch port mappings from various sources and forward them via UPnP.`,
+		Version:      fmt.Sprintf("%s (commit: %s, created: %s)", version, commit, created),
+		SilenceUsage: true,
 	}
 )
 
 func Execute() {
-	fmt.Print(banner)
-	fmt.Printf("Running version %s built on %s (commit %s)\n", version, created, commit)
+	// Diagnostics go to stderr so command output (e.g. list) stays pipeable.
+	fmt.Fprint(os.Stderr, banner)
+	fmt.Fprintf(os.Stderr, "Running version %s built on %s (commit %s)\n", version, created, commit)
 
-	err := rootCmd.Execute()
-	if err != nil {
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
@@ -67,10 +74,10 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "config file path")
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "", "config file path (default: ./config.yaml if present)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Do not apply changes - only list the ports")
 	rootCmd.PersistentFlags().StringVar(&localIP, "local-ip", "", "Local IP address to use for UPnP (default: auto-detected)")
-	rootCmd.PersistentFlags().StringVar(&gateway, "gateway", "", "UPnP gateway location URL (default: auto-detected)")
+	rootCmd.PersistentFlags().StringVar(&gateway, "gateway", "", "UPnP gateway description URL, e.g. http://192.168.1.1:5000/rootDesc.xml (default: auto-detected)")
 	rootCmd.PersistentFlags().DurationVar(&ttl, "ttl", upnp.DefaultLeaseDuration, "UPnP lease duration")
 
 	rootCmd.AddCommand(forwardCmd)
@@ -80,29 +87,34 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 }
 
-// bindFlags binds each cobra flag to its associated viper configuration
-func bindFlags(cmd *cobra.Command) {
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		envVarName := strings.ToUpper(fmt.Sprintf("%s%s", envPrefix, strings.ReplaceAll(f.Name, "-", "_")))
+// envVarName returns the environment variable for a flag, e.g. refresh-interval -> GANGPLANK_REFRESH_INTERVAL.
+func envVarName(flag string) string {
+	return envPrefix + "_" + strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
+}
+
+// bindFlags fills flags not set on the command line from the environment or config file.
+// Precedence: flag > environment variable > config file > default.
+func bindFlags(flags *pflag.FlagSet) {
+	flags.VisitAll(func(f *pflag.Flag) {
+		_ = viper.BindEnv(f.Name, envVarName(f.Name))
 
 		if !f.Changed && viper.IsSet(f.Name) {
-			val := viper.Get(f.Name)
-			cmd.Flags().Set(f.Name, fmt.Sprintf("%v", val))
+			if err := flags.Set(f.Name, viper.GetString(f.Name)); err != nil {
+				log.Fatalf("invalid value for %s: %v", f.Name, err)
+			}
 		}
-
-		viper.BindEnv(f.Name, envVarName)
 	})
 }
 
 func initConfig() {
-	viper.AutomaticEnv()
-	viper.SetEnvPrefix(envPrefix)
-	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
-
 	var err error
 	cfg, err = config.LoadConfig(configFile)
-	if err != nil && configFile != "" {
-		log.Fatalf("error loading config file: %v", err)
+	if err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if configFile != "" || !errors.As(err, &notFound) {
+			log.Fatalf("error loading config file: %v", err)
+		}
+		cfg = nil
 	}
 
 	if cfg != nil {
@@ -123,9 +135,9 @@ func initConfig() {
 		}
 	}
 
-	bindFlags(rootCmd)
+	bindFlags(rootCmd.PersistentFlags())
 
 	for _, cmd := range rootCmd.Commands() {
-		bindFlags(cmd)
+		bindFlags(cmd.Flags())
 	}
 }

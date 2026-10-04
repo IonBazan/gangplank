@@ -2,194 +2,260 @@ package providers
 
 import (
 	"context"
-	"github.com/docker/go-connections/nat"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/IonBazan/gangplank/internal/upnp"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+type eventStream struct {
+	msgs chan events.Message
+	errs chan error
+}
+
 type MockEventClient struct {
-	EventsChan chan events.Message
-	ErrChan    chan error
-	Inspect    map[string]container.InspectResponse
+	mu        sync.Mutex
+	streams   []eventStream
+	current   eventStream
+	subscribe chan struct{}
+	Running   []container.Summary
+	Inspect   map[string]container.InspectResponse
+}
+
+func newMockEventClient(streams int) *MockEventClient {
+	m := &MockEventClient{subscribe: make(chan struct{}, streams+1), Inspect: map[string]container.InspectResponse{}}
+	for range streams {
+		m.streams = append(m.streams, eventStream{make(chan events.Message, 10), make(chan error, 1)})
+	}
+	return m
 }
 
 func (m *MockEventClient) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
-	return m.EventsChan, m.ErrChan
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	defer func() { m.subscribe <- struct{}{} }()
+	if len(m.streams) == 0 {
+		// Never deliver anything once the scripted streams are used up.
+		m.current = eventStream{make(chan events.Message, 10), make(chan error, 1)}
+	} else {
+		m.current = m.streams[0]
+		m.streams = m.streams[1:]
+	}
+	return m.current.msgs, m.current.errs
+}
+
+func (m *MockEventClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]container.Summary(nil), m.Running...), nil
 }
 
 func (m *MockEventClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
-	if ctx == nil {
-		return container.InspectResponse{}, assert.AnError
-	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if info, ok := m.Inspect[containerID]; ok {
 		return info, nil
 	}
 	return container.InspectResponse{}, assert.AnError
 }
 
+func inspectResponse(id, name string, labels map[string]string, ports nat.PortMap) container.InspectResponse {
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: id, Name: "/" + name},
+		NetworkSettings:   &container.NetworkSettings{NetworkSettingsBase: container.NetworkSettingsBase{Ports: ports}},
+		Config:            &container.Config{Labels: labels},
+	}
+}
+
+func collect(ch <-chan types.PortMapping, n int) []types.PortMapping {
+	var got []types.PortMapping
+	timeout := time.After(time.Second)
+	for len(got) < n {
+		select {
+		case m := <-ch:
+			got = append(got, m)
+		case <-timeout:
+			return got
+		}
+	}
+	return got
+}
+
+func assertNoMore(t *testing.T, ch <-chan types.PortMapping) {
+	t.Helper()
+	select {
+	case m := <-ch:
+		t.Fatalf("unexpected mapping %+v", m)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func waitSubscribed(t *testing.T, m *MockEventClient) {
+	t.Helper()
+	select {
+	case <-m.subscribe:
+	case <-time.After(time.Second):
+		t.Fatal("provider did not subscribe to events")
+	}
+}
+
 func TestDockerEventPortProvider_Listen(t *testing.T) {
 	tests := []struct {
 		name       string
-		containers map[string]container.InspectResponse
-		events     []events.Message
+		inspect    container.InspectResponse
+		events     []events.Action
 		wantAdd    []types.PortMapping
 		wantDelete []types.PortMapping
 	}{
 		{
 			name: "Nginx start with published ports",
-			containers: map[string]container.InspectResponse{
-				"nginx1234567890": {
-					ContainerJSONBase: &container.ContainerJSONBase{
-						ID:   "nginx1234567890",
-						Name: "/nginx",
-					},
-					NetworkSettings: &container.NetworkSettings{
-						NetworkSettingsBase: container.NetworkSettingsBase{
-							Ports: map[nat.Port][]nat.PortBinding{
-								"80/tcp": {{HostPort: "8080"}},
-							},
-						},
-					},
-					Config: &container.Config{
-						Labels: map[string]string{
-							labelForward: "published",
-						},
-					},
-				},
-			},
-			events: []events.Message{
-				{Action: "start", Actor: events.Actor{ID: "nginx1234567890"}},
-			},
-			wantAdd: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
-			},
-			wantDelete: []types.PortMapping{},
+			inspect: inspectResponse("nginx1234567890", "nginx", map[string]string{labelForward: "published"},
+				nat.PortMap{"80/tcp": {{HostIP: "0.0.0.0", HostPort: "8080"}, {HostIP: "::", HostPort: "8080"}}}),
+			events:  []events.Action{events.ActionStart},
+			wantAdd: []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"}},
 		},
 		{
-			name: "Redis start and stop with host-referenced label",
-			containers: map[string]container.InspectResponse{
-				"redis4567890123": {
-					ContainerJSONBase: &container.ContainerJSONBase{
-						ID:   "redis4567890123",
-						Name: "/redis",
-					},
-					NetworkSettings: &container.NetworkSettings{
-						NetworkSettingsBase: container.NetworkSettingsBase{
-							Ports: map[nat.Port][]nat.PortBinding{
-								"6379/tcp": {{HostPort: "6379"}},
-							},
-						},
-					},
-					Config: &container.Config{
-						Labels: map[string]string{
-							labelForward: "6379:6379/tcp",
-						},
-					},
-				},
-			},
-			events: []events.Message{
-				{Action: "start", Actor: events.Actor{ID: "redis4567890123"}},
-				{Action: "stop", Actor: events.Actor{ID: "redis4567890123"}},
-			},
-			wantAdd: []types.PortMapping{
-				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
-			},
-			wantDelete: []types.PortMapping{
-				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
-			},
+			name: "Redis start, stop and die deletes once",
+			inspect: inspectResponse("redis4567890123", "redis", map[string]string{labelForward: "6379:6379/tcp"},
+				nat.PortMap{"6379/tcp": {{HostPort: "6379"}}}),
+			events:     []events.Action{events.ActionStart, events.ActionDie, events.ActionStop},
+			wantAdd:    []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
+			wantDelete: []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
 		},
 		{
 			name: "Postgres start with container-referenced label",
-			containers: map[string]container.InspectResponse{
-				"pg7890123456789": {
-					ContainerJSONBase: &container.ContainerJSONBase{
-						ID:   "pg7890123456789",
-						Name: "/postgres",
-					},
-					NetworkSettings: &container.NetworkSettings{
-						NetworkSettingsBase: container.NetworkSettingsBase{
-							Ports: map[nat.Port][]nat.PortBinding{
-								"5432/tcp": {{HostPort: "5433"}},
-							},
-						},
-					},
-					Config: &container.Config{
-						Labels: map[string]string{
-							labelForwardContainer: "5432/tcp",
-						},
-					},
-				},
-			},
-			events: []events.Message{
-				{Action: "start", Actor: events.Actor{ID: "pg7890123456789"}},
-			},
-			wantAdd: []types.PortMapping{
-				{ExternalPort: 5433, InternalPort: 5432, Protocol: "TCP", Name: "postgres"},
-			},
-			wantDelete: []types.PortMapping{},
-		},
-		{
-			name:       "No events",
-			containers: map[string]container.InspectResponse{},
-			events:     []events.Message{},
-			wantAdd:    []types.PortMapping{},
-			wantDelete: []types.PortMapping{},
+			inspect: inspectResponse("pg7890123456789", "postgres", map[string]string{labelForwardContainer: "5432/tcp"},
+				nat.PortMap{"5432/tcp": {{HostPort: "5433"}}}),
+			events:  []events.Action{events.ActionStart},
+			wantAdd: []types.PortMapping{{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			eventsChan := make(chan events.Message, len(tt.events))
-			errChan := make(chan error)
-			mockClient := &MockEventClient{
-				EventsChan: eventsChan,
-				ErrChan:    errChan,
-				Inspect:    tt.containers,
-			}
-			portProvider := NewDockerEventPortProvider(mockClient)
+			mockClient := newMockEventClient(1)
+			mockClient.Inspect[tt.inspect.ID] = tt.inspect
+			provider := NewDockerEventPortProvider(mockClient)
 
 			addCh := make(chan types.PortMapping, 10)
 			deleteCh := make(chan types.PortMapping, 10)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			go portProvider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
+			go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
+			waitSubscribed(t, mockClient)
 
-			// Send events
-			for _, event := range tt.events {
-				eventsChan <- event
+			for _, action := range tt.events {
+				mockClient.streamsSend(events.Message{Action: action, Actor: events.Actor{ID: tt.inspect.ID}})
 			}
 
-			// Collect results with timeout
-			var gotAdd, gotDelete []types.PortMapping
-			timeout := time.After(1 * time.Second)
-
-		collect:
-			for {
-				select {
-				case m := <-addCh:
-					gotAdd = append(gotAdd, m)
-				case m := <-deleteCh:
-					gotDelete = append(gotDelete, m)
-				case <-timeout:
-					break collect
-				}
-			}
-
-			assert.ElementsMatch(t, tt.wantAdd, gotAdd)
-			assert.ElementsMatch(t, tt.wantDelete, gotDelete)
-
-			if len(gotAdd) > 0 {
-				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				err := client.ForwardPorts(gotAdd)
-				assert.NoError(t, err)
-			}
+			assert.ElementsMatch(t, tt.wantAdd, collect(addCh, len(tt.wantAdd)))
+			assert.ElementsMatch(t, tt.wantDelete, collect(deleteCh, len(tt.wantDelete)))
+			assertNoMore(t, addCh)
+			assertNoMore(t, deleteCh)
 		})
+	}
+}
+
+// streamsSend delivers a message on the stream most recently handed out.
+func (m *MockEventClient) streamsSend(msg events.Message) {
+	m.mu.Lock()
+	s := m.current
+	m.mu.Unlock()
+	s.msgs <- msg
+}
+
+func TestDockerEventPortProvider_TracksContainersRunningAtStartup(t *testing.T) {
+	mockClient := newMockEventClient(1)
+	mockClient.Running = []container.Summary{{
+		ID:     "web123456789012",
+		Names:  []string{"/web"},
+		Labels: map[string]string{labelForward: "published"},
+		Ports:  []container.Port{{PublicPort: 80, PrivatePort: 80, Type: "tcp"}},
+	}}
+	provider := NewDockerEventPortProvider(mockClient)
+
+	addCh := make(chan types.PortMapping, 10)
+	deleteCh := make(chan types.PortMapping, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
+	waitSubscribed(t, mockClient)
+
+	// Initial sync must not re-announce containers the daemon already forwarded.
+	assertNoMore(t, addCh)
+
+	mockClient.streamsSend(events.Message{Action: events.ActionStop, Actor: events.Actor{ID: "web123456789012"}})
+	assert.Equal(t, []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}}, collect(deleteCh, 1))
+}
+
+func TestDockerEventPortProvider_ReconnectsAndResyncs(t *testing.T) {
+	mockClient := newMockEventClient(2)
+	mockClient.Running = []container.Summary{{
+		ID:     "old123456789012",
+		Names:  []string{"/old"},
+		Labels: map[string]string{labelForward: "1000"},
+	}}
+	provider := NewDockerEventPortProvider(mockClient)
+	provider.retryDelay = time.Millisecond
+
+	addCh := make(chan types.PortMapping, 10)
+	deleteCh := make(chan types.PortMapping, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
+	waitSubscribed(t, mockClient)
+
+	// While disconnected, "old" stops and "new" starts.
+	mockClient.mu.Lock()
+	mockClient.Running = []container.Summary{{
+		ID:     "new123456789012",
+		Names:  []string{"/new"},
+		Labels: map[string]string{labelForward: "2000"},
+	}}
+	mockClient.current.errs <- errors.New("daemon restarted")
+	mockClient.mu.Unlock()
+
+	waitSubscribed(t, mockClient)
+	require.Equal(t, []types.PortMapping{{ExternalPort: 2000, InternalPort: 2000, Protocol: "TCP", Name: "new"}}, collect(addCh, 1))
+	require.Equal(t, []types.PortMapping{{ExternalPort: 1000, InternalPort: 1000, Protocol: "TCP", Name: "old"}}, collect(deleteCh, 1))
+}
+
+func TestDockerEventPortProvider_NilDeleteChannel(t *testing.T) {
+	mockClient := newMockEventClient(1)
+	mockClient.Inspect["svc12345678901"] = inspectResponse("svc12345678901", "svc", map[string]string{labelForward: "81"}, nil)
+	provider := NewDockerEventPortProvider(mockClient)
+
+	addCh := make(chan types.PortMapping, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		provider.Listen(ctx, PortEventChannels{Add: addCh})
+		close(done)
+	}()
+	waitSubscribed(t, mockClient)
+
+	mockClient.streamsSend(events.Message{Action: events.ActionStart, Actor: events.Actor{ID: "svc12345678901"}})
+	mockClient.streamsSend(events.Message{Action: events.ActionStop, Actor: events.Actor{ID: "svc12345678901"}})
+	mockClient.streamsSend(events.Message{Action: events.ActionStart, Actor: events.Actor{ID: "svc12345678901"}})
+	// Stop with no delete channel must not block the event loop.
+	assert.Len(t, collect(addCh, 2), 2)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Listen did not return after cancel")
 	}
 }

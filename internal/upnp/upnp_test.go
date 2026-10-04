@@ -1,6 +1,7 @@
 package upnp
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -26,67 +27,82 @@ func TestClient_ForwardPorts(t *testing.T) {
 			wantForwarded: []types.PortMapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: nginx"},
 			},
-			wantErr: false,
 		},
 		{
-			name: "Multiple mappings with unnamed port",
+			name: "Multiple mappings with unnamed port and lowercase protocol",
 			mappings: []types.PortMapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
-				{ExternalPort: 5433, InternalPort: 5432, Protocol: "UDP", Name: ""},
+				{ExternalPort: 5433, InternalPort: 5432, Protocol: "udp", Name: ""},
 			},
 			localIP: "192.168.1.101",
 			wantForwarded: []types.PortMapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "Gangplank UPnP: redis"},
 				{ExternalPort: 5433, InternalPort: 5432, Protocol: "UDP", Name: "Gangplank UPnP"},
 			},
-			wantErr: false,
 		},
 		{
 			name:          "Empty mappings",
 			mappings:      []types.PortMapping{},
 			localIP:       "192.168.1.102",
-			wantForwarded: []types.PortMapping{},
-			wantErr:       false,
+			wantForwarded: nil,
 		},
 		{
 			name: "Mapping with error",
 			mappings: []types.PortMapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
+				{ExternalPort: 8081, InternalPort: 81, Protocol: "TCP", Name: "other"},
 			},
 			localIP:       "192.168.1.103",
 			forwardErr:    errors.New("UPnP error"),
-			wantForwarded: []types.PortMapping{
-				// No mappings should be added due to the error
-			},
-			wantErr: true,
+			wantForwarded: nil,
+			wantErr:       true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &DummyConnection{
-				Forwarded:  []types.PortMapping{},
-				ForwardErr: tt.forwardErr,
-			}
-			client := &Client{
-				uPnPConnection: mock,
-				LocalIP:        tt.localIP,
-			}
+			mock := &DummyConnection{ForwardErr: tt.forwardErr}
+			client := NewClientWithConnection(mock, tt.localIP, DefaultLeaseDuration)
 
-			err := client.ForwardPorts(tt.mappings)
+			err := client.ForwardPorts(context.Background(), tt.mappings)
 			if tt.wantErr {
-				assert.Error(t, err)
-				assert.Equal(t, tt.forwardErr, err)
+				assert.ErrorIs(t, err, tt.forwardErr)
+				// Every mapping is attempted and reported, not just the first.
+				assert.Contains(t, err.Error(), "8080/TCP")
+				assert.Contains(t, err.Error(), "8081/TCP")
 			} else {
 				assert.NoError(t, err)
 			}
-			assert.Equal(t, tt.wantForwarded, mock.Forwarded)
-
-			if len(tt.mappings) > 0 && !tt.wantErr {
-				assert.Len(t, mock.Forwarded, len(tt.mappings))
-			}
+			forwarded, _ := mock.Snapshot()
+			assert.Equal(t, tt.wantForwarded, forwarded)
 		})
 	}
+}
+
+type permanentOnlyConnection struct {
+	DummyConnection
+	leases []uint32
+}
+
+func (c *permanentOnlyConnection) AddPortMappingCtx(ctx context.Context, host string, ext uint16, proto string, internal uint16, client string, enabled bool, desc string, lease uint32) error {
+	c.leases = append(c.leases, lease)
+	if lease != 0 {
+		return NewUPnPError(errCodeOnlyPermanentLeasesSupported, "OnlyPermanentLeasesSupported")
+	}
+	return nil
+}
+
+func TestClient_ForwardPorts_PermanentLeaseFallback(t *testing.T) {
+	conn := &permanentOnlyConnection{}
+	client := NewClientWithConnection(conn, "192.168.1.100", DefaultLeaseDuration)
+
+	ports := []types.PortMapping{
+		{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"},
+		{ExternalPort: 443, InternalPort: 443, Protocol: "TCP"},
+	}
+	assert.NoError(t, client.ForwardPorts(context.Background(), ports))
+	// First call is rejected and retried, later calls go straight to a permanent lease.
+	assert.Equal(t, []uint32{3600, 0, 0}, conn.leases)
 }
 
 func TestClient_DeletePortMapping(t *testing.T) {
@@ -95,101 +111,116 @@ func TestClient_DeletePortMapping(t *testing.T) {
 		extPort   int
 		protocol  string
 		deleteErr error
-		wantCalls []struct {
-			ExtPort  uint16
-			Protocol string
-		}
-		wantErr bool
+		wantCalls []DeletedMapping
+		wantErr   bool
 	}{
 		{
-			name:     "Delete TCP port",
-			extPort:  8080,
-			protocol: "TCP",
-			wantCalls: []struct {
-				ExtPort  uint16
-				Protocol string
-			}{{ExtPort: 8080, Protocol: "TCP"}},
-			wantErr: false,
+			name:      "Delete TCP port",
+			extPort:   8080,
+			protocol:  "tcp",
+			wantCalls: []DeletedMapping{{ExtPort: 8080, Protocol: "TCP"}},
 		},
 		{
 			name:      "Delete with error",
 			extPort:   6379,
 			protocol:  "UDP",
 			deleteErr: errors.New("delete failed"),
-			wantCalls: []struct {
-				ExtPort  uint16
-				Protocol string
-			}{{ExtPort: 6379, Protocol: "UDP"}},
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &DummyConnection{DeleteErr: tt.deleteErr}
+			client := NewClientWithConnection(mock, "192.168.1.100", DefaultLeaseDuration)
+
+			err := client.DeletePortMapping(context.Background(), tt.extPort, tt.protocol)
+			if tt.wantErr {
+				assert.Equal(t, tt.deleteErr, err)
+			} else {
+				assert.NoError(t, err)
+				_, deleted := mock.Snapshot()
+				assert.Equal(t, tt.wantCalls, deleted)
+			}
+		})
+	}
+}
+
+type failingListConnection struct {
+	DummyConnection
+	err error
+}
+
+func (c *failingListConnection) GetGenericPortMappingEntryCtx(ctx context.Context, index uint16) (string, uint16, string, uint16, string, bool, string, uint32, error) {
+	if index == 0 {
+		return "", 80, "TCP", 80, "192.168.1.100", true, "first", 0, nil
+	}
+	return "", 0, "", 0, "", false, "", 0, c.err
+}
+
+func TestClient_ListPortMappings(t *testing.T) {
+	first := PortMappingEntry{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "first", Enabled: true}
+
+	tests := []struct {
+		name    string
+		conn    UPnPConnection
+		want    []PortMappingEntry
+		wantErr bool
+	}{
+		{
+			name: "Single mapping",
+			conn: &DummyConnection{},
+			want: []PortMappingEntry{{
+				ExternalPort:  8080,
+				InternalPort:  80,
+				Protocol:      "TCP",
+				InternalIP:    "192.168.1.100",
+				Description:   "Test Mapping",
+				LeaseDuration: 3600,
+				Enabled:       true,
+			}},
+		},
+		{
+			name: "End of list signalled with 713",
+			conn: &failingListConnection{err: NewUPnPError(713, "SpecifiedArrayIndexInvalid")},
+			want: []PortMappingEntry{first},
+		},
+		{
+			name: "End of list signalled with 714",
+			conn: &failingListConnection{err: NewUPnPError(714, "NoSuchEntryInArray")},
+			want: []PortMappingEntry{first},
+		},
+		{
+			name:    "Other error",
+			conn:    &failingListConnection{err: errors.New("boom")},
 			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &DummyConnection{
-				Deleted: []struct {
-					ExtPort  uint16
-					Protocol string
-				}{},
-				DeleteErr: tt.deleteErr,
-			}
-			client := &Client{
-				uPnPConnection: mock,
-				LocalIP:        "192.168.1.100",
-			}
+			client := NewClientWithConnection(tt.conn, "192.168.1.100", DefaultLeaseDuration)
 
-			err := client.DeletePortMapping(tt.extPort, tt.protocol)
+			mappings, err := client.ListPortMappings(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Equal(t, tt.deleteErr, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.wantCalls, mock.Deleted)
+				assert.Equal(t, tt.want, mappings)
 			}
 		})
 	}
 }
 
-func TestClient_ListPortMappings(t *testing.T) {
-	tests := []struct {
-		name          string
-		expected      []PortMappingEntry
-		expectedError error
-	}{
-		{
-			name: "Single mapping",
-			expected: []PortMappingEntry{
-				{
-					ExternalPort:  8080,
-					InternalPort:  80,
-					Protocol:      "TCP",
-					InternalIP:    "192.168.1.100",
-					Description:   "Test Mapping",
-					LeaseDuration: 3600,
-					Enabled:       true,
-				},
-			},
-			expectedError: nil,
-		},
-	}
+func TestPortMappingEntry_IsOwned(t *testing.T) {
+	assert.True(t, PortMappingEntry{Description: Description("web")}.IsOwned())
+	assert.True(t, PortMappingEntry{Description: Description("")}.IsOwned())
+	assert.False(t, PortMappingEntry{Description: "Plex"}.IsOwned())
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &DummyConnection{}
-
-			client := &Client{
-				uPnPConnection: mock,
-				LocalIP:        "192.168.1.100",
-			}
-
-			mappings, err := client.ListPortMappings()
-			if tt.expectedError != nil {
-				assert.Error(t, err)
-				assert.Equal(t, tt.expectedError.Error(), err.Error())
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, mappings)
-			}
-		})
-	}
+func TestRouteSourceIP_RejectsLoopback(t *testing.T) {
+	ip, err := routeSourceIP("127.0.0.1")
+	// Loopback is never a valid forwarding target.
+	assert.Error(t, err)
+	assert.Empty(t, ip)
 }

@@ -5,18 +5,18 @@ import (
 	"testing"
 
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/IonBazan/gangplank/internal/upnp"
 	"github.com/docker/docker/api/types/container"
 	"github.com/stretchr/testify/assert"
 )
 
 type MockDockerClient struct {
 	Containers []container.Summary
+	Err        error
 }
 
 func (m *MockDockerClient) ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error) {
-	if ctx == nil {
-		return nil, assert.AnError
+	if m.Err != nil {
+		return nil, m.Err
 	}
 	return m.Containers, nil
 }
@@ -43,7 +43,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"},
 			},
 			wantErr: false,
 		},
@@ -81,9 +81,13 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 5433, InternalPort: 5432, Protocol: "TCP", Name: "postgres"},
+				{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"},
 			},
 			wantErr: false,
+		},
+		{
+			name:    "Docker unavailable",
+			wantErr: true,
 		},
 		{
 			name:       "No containers",
@@ -98,19 +102,18 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 			mockClient := &MockDockerClient{
 				Containers: tt.containers,
 			}
+			if tt.wantErr {
+				mockClient.Err = assert.AnError
+			}
 			portProvider := NewDockerPortProvider(mockClient)
 
-			gotPorts, err := portProvider.GetPortMappings()
+			gotPorts, err := portProvider.GetPortMappings(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, gotPorts)
 			} else {
 				assert.NoError(t, err)
 				assert.ElementsMatch(t, tt.wantPorts, gotPorts)
-
-				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				err = client.ForwardPorts(gotPorts)
-				assert.NoError(t, err)
 			}
 		})
 	}

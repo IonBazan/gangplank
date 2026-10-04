@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"os/signal"
+	"syscall"
+
 	"github.com/IonBazan/gangplank/internal"
 	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/spf13/cobra"
-	"log"
 )
 
 var (
@@ -12,27 +18,37 @@ var (
 		Use:   "forward",
 		Short: "Fetch and forward port mappings",
 		Long:  `Fetches port mappings from Docker and YAML sources and forwards them via UPnP with Gangplank.`,
-		Run: func(cmd *cobra.Command, args []string) {
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+
 			log.Println("Starting Gangplank...")
-			upnpClient, err := SetupUPnPClient()
+			dockerCli, err := NewDockerClient()
 			if err != nil {
-				log.Printf("Failed to initialize UPnP client: %v, proceeding without UPnP forwarding", err)
-			} else {
-				log.Printf("UPnP client initialized with local IP: %s", upnpClient.LocalIP)
+				return err
+			}
+			defer dockerCli.Close()
+
+			gp := internal.NewGangplank(cfg, dockerCli)
+			ports, fetchErr := gp.GetPortMappings(ctx)
+			listPorts(ports)
+
+			upnpClient, err := SetupUPnPClient(ctx)
+			if err != nil {
+				return errors.Join(fetchErr, err)
+			}
+			log.Printf("UPnP client initialized with local IP: %s", upnpClient.LocalIP)
+			gp.SetForwarder(upnpClient)
+
+			if err := gp.ForwardPorts(ctx, ports); err != nil {
+				return errors.Join(fetchErr, fmt.Errorf("some port mappings could not be applied: %w", err))
 			}
 
-			gp := internal.NewGangplank(cfg, upnpClient)
-
-			initialPorts, _ := gp.GetPortMappings()
-
-			listPorts(initialPorts)
-			gp.ForwardPorts(initialPorts)
+			return fetchErr
 		},
 	}
 )
-
-func init() {
-}
 
 func listPorts(ports []types.PortMapping) {
 	for _, p := range ports {

@@ -27,7 +27,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"},
 			},
 		},
 		{
@@ -59,7 +59,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 5433, InternalPort: 5432, Protocol: "TCP", Name: "postgres"},
+				{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"},
 			},
 		},
 		{
@@ -121,6 +121,43 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			wantPorts: []types.PortMapping{},
 		},
 		{
+			name: "Container-referenced label with explicit external port",
+			ctr: container.Summary{
+				ID:    "web123456789012",
+				Names: []string{"/web"},
+				Ports: []container.Port{
+					{PublicPort: 32768, PrivatePort: 80, Type: "tcp"},
+					{PublicPort: 32769, PrivatePort: 53, Type: "udp"},
+					{PublicPort: 32770, PrivatePort: 53, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForwardContainer: "8080:80/tcp, 5353:53/udp",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 8080, InternalPort: 32768, Protocol: "TCP", Name: "web"},
+				{ExternalPort: 5353, InternalPort: 32769, Protocol: "UDP", Name: "web"},
+			},
+		},
+		{
+			name: "Duplicate IPv4 and IPv6 bindings, loopback skipped",
+			ctr: container.Summary{
+				ID:    "dual12345678901",
+				Names: []string{"/dual"},
+				Ports: []container.Port{
+					{IP: "0.0.0.0", PublicPort: 80, PrivatePort: 80, Type: "tcp"},
+					{IP: "::", PublicPort: 80, PrivatePort: 80, Type: "tcp"},
+					{IP: "127.0.0.1", PublicPort: 9000, PrivatePort: 9000, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForward: "published",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "dual"},
+			},
+		},
+		{
 			name: "Short ID without name",
 			ctr: container.Summary{
 				ID:    "short123",
@@ -133,7 +170,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "short123"},
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "short123"},
 			},
 		},
 	}
