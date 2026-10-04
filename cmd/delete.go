@@ -1,37 +1,34 @@
 package cmd
 
 import (
+	"fmt"
 	"log"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/spf13/cobra"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
-var (
-	deleteCmd = &cobra.Command{
-		Use:   "delete <external>/<protocol>",
-		Short: "Delete a single UPnP port mapping",
-		Long:  `Deletes a single port mapping rule directly from the UPnP gateway for debugging purposes. Format: <external>:<internal>/<protocol> (e.g., 8080:80/tcp). Note: internal port is ignored for deletion.`,
-		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			upnpClient, err := SetupUPnPClient()
-			if err != nil {
-				log.Fatalf("Failed to initialize UPnP client: %v", err)
-			}
+var deleteCmd = &cobra.Command{
+	Use:   "delete <external>[/<protocol>]",
+	Short: "Delete a single UPnP port mapping",
+	Long:  `Deletes a single port mapping rule directly from the UPnP gateway. Format: <external>[/<protocol>] (e.g., 8080/tcp). Protocol defaults to TCP.`,
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mapping, err := types.ParsePortMapping(args[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse port mapping: %w", err)
+		}
 
-			mapping, err := types.ParsePortMapping(args[0])
-			if err != nil {
-				log.Fatalf("Failed to parse port mapping: %v", err)
-			}
+		upnpClient, err := SetupUPnPClient(cmd.Context())
+		if err != nil {
+			return err
+		}
 
-			if err := upnpClient.DeletePortMapping(mapping.ExternalPort, mapping.Protocol); err != nil {
-				log.Printf("Failed to delete port mapping %d/%s: %v", mapping.ExternalPort, mapping.Protocol, err)
-			} else {
-				log.Printf("Successfully deleted port mapping %d/%s", mapping.ExternalPort, mapping.Protocol)
-			}
-		},
-	}
-)
-
-func init() {
+		if err := upnpClient.DeletePortMapping(cmd.Context(), mapping.ExternalPort, mapping.Protocol); err != nil {
+			return fmt.Errorf("failed to delete port mapping %s: %w", mapping.Key(), err)
+		}
+		log.Printf("Successfully deleted port mapping %s", mapping.Key())
+		return nil
+	},
 }

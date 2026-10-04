@@ -1,28 +1,34 @@
 package providers
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
+
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
 )
 
 type ContainerInfo struct {
 	Labels        map[string]string
-	Ports         []container.Port
+	Ports         []container.PortSummary
 	ContainerName string
 	ID            string
 }
 
+// labelForward lists host ports to forward: "published", or "<external>:<host port>[/<protocol>]".
 const labelForward = "gangplank.forward"
+
+// labelForwardContainer lists container ports to forward, resolving the host port Docker bound them to:
+// "published", or "[<external>:]<container port>[/<protocol>]".
 const labelForwardContainer = "gangplank.forward.container"
 
 func extractPortsFromContainer(ctr container.Summary) []types.PortMapping {
 	var mappings []types.PortMapping
 	containerName := shortID(ctr.ID)
-	if len(ctr.Names) > 0 {
+	if len(ctr.Names) > 0 && ctr.Names[0] != "" {
 		containerName = strings.TrimPrefix(ctr.Names[0], "/")
 	}
 	info := ContainerInfo{
@@ -39,23 +45,27 @@ func extractPortsFromContainer(ctr container.Summary) []types.PortMapping {
 		mappings = append(mappings, parseDockerLabel(val, info, true)...)
 	}
 
-	return mappings
+	return dedupe(mappings)
 }
 
 func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []types.PortMapping {
 	var mappings []types.PortMapping
-	parts := strings.Split(label, ",")
 
-	for _, part := range parts {
+	for _, part := range strings.Split(label, ",") {
 		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
 		if part == "published" {
 			for _, port := range info.Ports {
-				if port.PublicPort == 0 {
+				if !isForwardable(port) {
 					continue
 				}
+				// The router forwards to this host, so the internal port is the host port.
 				mappings = append(mappings, types.PortMapping{
 					ExternalPort: int(port.PublicPort),
-					InternalPort: int(port.PrivatePort),
+					InternalPort: int(port.PublicPort),
 					Protocol:     strings.ToUpper(port.Type),
 					Name:         info.ContainerName,
 				})
@@ -64,30 +74,13 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 		}
 
 		if isContainerRef {
-			fields := strings.Split(part, "/")
-			protocol := "TCP"
-			if len(fields) == 2 && fields[1] != "" {
-				upperProtocol := strings.ToUpper(fields[1])
-				if upperProtocol == "TCP" || upperProtocol == "UDP" {
-					protocol = upperProtocol
-				}
-			}
-			intPort, err := strconv.Atoi(fields[0])
+			mapping, err := resolveContainerPort(part, info.Ports)
 			if err != nil {
-				log.Printf("Invalid container port %s for container %s: %v", fields[0], shortID(info.ID), err)
+				log.Printf("Invalid container port mapping %s for container %s: %v", part, shortID(info.ID), err)
 				continue
 			}
-			for _, port := range info.Ports {
-				if int(port.PrivatePort) == intPort && port.PublicPort != 0 {
-					mappings = append(mappings, types.PortMapping{
-						ExternalPort: int(port.PublicPort),
-						InternalPort: intPort,
-						Protocol:     protocol,
-						Name:         info.ContainerName,
-					})
-					break
-				}
-			}
+			mapping.Name = info.ContainerName
+			mappings = append(mappings, mapping)
 		} else {
 			mapping, err := types.ParsePortMapping(part)
 			if err != nil {
@@ -101,10 +94,78 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 	return mappings
 }
 
+// resolveContainerPort parses "[<external>:]<container port>[/<protocol>]" and maps
+// the external port to the host port Docker published the container port on.
+// When the external port is omitted, the container port number is used.
+func resolveContainerPort(spec string, ports []container.PortSummary) (types.PortMapping, error) {
+	mapping, err := types.ParsePortMapping(spec)
+	if err != nil {
+		return mapping, err
+	}
+	containerPort := mapping.InternalPort
+	if !strings.Contains(spec, ":") {
+		mapping.ExternalPort = containerPort
+	}
+
+	for _, port := range ports {
+		if int(port.PrivatePort) == containerPort && strings.EqualFold(port.Type, mapping.Protocol) && isForwardable(port) {
+			mapping.InternalPort = int(port.PublicPort)
+			return mapping, nil
+		}
+	}
+
+	return mapping, fmt.Errorf("container port %d/%s is not published", containerPort, mapping.Protocol)
+}
+
+// isForwardable reports whether the port is published on an address reachable from the LAN.
+func isForwardable(port container.PortSummary) bool {
+	return port.PublicPort != 0 && !port.IP.IsLoopback()
+}
+
+// dedupe drops repeated mappings (e.g. Docker reports both 0.0.0.0 and :: bindings).
+func dedupe(mappings []types.PortMapping) []types.PortMapping {
+	seen := make(map[string]bool, len(mappings))
+	result := mappings[:0]
+	for _, m := range mappings {
+		if seen[m.Key()] {
+			continue
+		}
+		seen[m.Key()] = true
+		result = append(result, m)
+	}
+
+	return result
+}
+
 func shortID(id string) string {
 	const maxLen = 12
 	if len(id) <= maxLen {
 		return id
 	}
 	return id[:maxLen]
+}
+
+// portsFromInspect converts inspect port bindings to the summary format used by the label parser.
+func portsFromInspect(info container.InspectResponse) []container.PortSummary {
+	if info.NetworkSettings == nil {
+		return nil
+	}
+
+	var ports []container.PortSummary
+	for portProto, bindings := range info.NetworkSettings.Ports {
+		for _, binding := range bindings {
+			hostPort, err := strconv.Atoi(binding.HostPort)
+			if err != nil || hostPort <= 0 || hostPort > 65535 {
+				continue
+			}
+			ports = append(ports, container.PortSummary{
+				IP:          binding.HostIP,
+				PrivatePort: portProto.Num(),
+				PublicPort:  uint16(hostPort),
+				Type:        string(portProto.Proto()),
+			})
+		}
+	}
+
+	return ports
 }

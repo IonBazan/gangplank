@@ -1,9 +1,11 @@
 package config
 
 import (
-	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/spf13/viper"
 	"time"
+
+	"github.com/spf13/viper"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 type Config struct {

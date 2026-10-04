@@ -1,11 +1,13 @@
 package providers
 
 import (
+	"net/netip"
 	"testing"
 
-	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 func TestExtractPortsFromContainer(t *testing.T) {
@@ -19,7 +21,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "nginx1234567890",
 				Names: []string{"/nginx"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -27,7 +29,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"},
 			},
 		},
 		{
@@ -35,7 +37,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "redis4567890123",
 				Names: []string{"/redis"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 6379, PrivatePort: 6379, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -51,7 +53,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "pg789012345678",
 				Names: []string{"/postgres"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 5433, PrivatePort: 5432, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -59,7 +61,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 5433, InternalPort: 5432, Protocol: "TCP", Name: "postgres"},
+				{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"},
 			},
 		},
 		{
@@ -67,7 +69,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "nginx_multi12345",
 				Names: []string{"/nginx-multi"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 					{PublicPort: 8443, PrivatePort: 443, Type: "tcp"},
 				},
@@ -85,7 +87,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "no_labels123456",
 				Names: []string{"/no-labels"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 				},
 				Labels: map[string]string{},
@@ -97,7 +99,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "invalid123456789",
 				Names: []string{"/invalid"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -111,7 +113,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			ctr: container.Summary{
 				ID:    "no_match12345678",
 				Names: []string{"/no-match"},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -121,11 +123,48 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			wantPorts: []types.PortMapping{},
 		},
 		{
+			name: "Container-referenced label with explicit external port",
+			ctr: container.Summary{
+				ID:    "web123456789012",
+				Names: []string{"/web"},
+				Ports: []container.PortSummary{
+					{PublicPort: 32768, PrivatePort: 80, Type: "tcp"},
+					{PublicPort: 32769, PrivatePort: 53, Type: "udp"},
+					{PublicPort: 32770, PrivatePort: 53, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForwardContainer: "8080:80/tcp, 5353:53/udp",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 8080, InternalPort: 32768, Protocol: "TCP", Name: "web"},
+				{ExternalPort: 5353, InternalPort: 32769, Protocol: "UDP", Name: "web"},
+			},
+		},
+		{
+			name: "Duplicate IPv4 and IPv6 bindings, loopback skipped",
+			ctr: container.Summary{
+				ID:    "dual12345678901",
+				Names: []string{"/dual"},
+				Ports: []container.PortSummary{
+					{IP: netip.MustParseAddr("0.0.0.0"), PublicPort: 80, PrivatePort: 80, Type: "tcp"},
+					{IP: netip.MustParseAddr("::"), PublicPort: 80, PrivatePort: 80, Type: "tcp"},
+					{IP: netip.MustParseAddr("127.0.0.1"), PublicPort: 9000, PrivatePort: 9000, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForward: "published",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "dual"},
+			},
+		},
+		{
 			name: "Short ID without name",
 			ctr: container.Summary{
 				ID:    "short123",
 				Names: []string{},
-				Ports: []container.Port{
+				Ports: []container.PortSummary{
 					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
 				},
 				Labels: map[string]string{
@@ -133,7 +172,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 			},
 			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "short123"},
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "short123"},
 			},
 		},
 	}

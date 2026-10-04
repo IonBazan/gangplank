@@ -2,23 +2,43 @@ package upnp
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/huin/goupnp/soap"
 	"log"
+	"math"
 	"net"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"time"
 
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/huin/goupnp/dcps/internetgateway1"
 	"github.com/huin/goupnp/dcps/internetgateway2"
+	"github.com/huin/goupnp/soap"
+
+	"github.com/IonBazan/gangplank/internal/types"
 )
 
 const DefaultLeaseDuration = 60 * time.Minute
-const defaultDescription = "Gangplank UPnP"
+
+// DescriptionPrefix marks mappings created by Gangplank.
+const DescriptionPrefix = "Gangplank UPnP"
+
+const (
+	discoveryTimeout = 5 * time.Second
+	callTimeout      = 10 * time.Second
+)
+
+// UPnP error codes (UPnP IGD WANIPConnection spec).
+const (
+	errCodeSpecifiedArrayIndexInvalid   = 713
+	errCodeNoSuchEntryInArray           = 714
+	errCodeOnlyPermanentLeasesSupported = 725
+)
 
 type UPnPConnection interface {
-	AddPortMapping(
+	AddPortMappingCtx(
+		ctx context.Context,
 		NewRemoteHost string,
 		NewExternalPort uint16,
 		NewProtocol string,
@@ -29,13 +49,14 @@ type UPnPConnection interface {
 		NewLeaseDuration uint32,
 	) (err error)
 
-	DeletePortMapping(
+	DeletePortMappingCtx(
+		ctx context.Context,
 		NewRemoteHost string,
 		NewExternalPort uint16,
 		NewProtocol string,
 	) (err error)
 
-	GetExternalIPAddress() (
+	GetExternalIPAddressCtx(ctx context.Context) (
 		NewExternalIPAddress string,
 		err error,
 	)
@@ -56,37 +77,43 @@ type PortMappingEntry struct {
 	Enabled       bool
 }
 
+// IsOwned reports whether the mapping was created by Gangplank.
+func (e PortMappingEntry) IsOwned() bool {
+	return strings.HasPrefix(e.Description, DescriptionPrefix)
+}
+
 // Client wraps the UPnP client and local IP for port forwarding.
 type Client struct {
 	uPnPConnection UPnPConnection
 	LocalIP        string
 	duration       time.Duration
+	permanentOnly  atomic.Bool
 }
 
-func NewClient(localIPOverride, gatewayOverride string, duration time.Duration) (*Client, error) {
-	var upnpClient UPnPConnection
+func NewClient(ctx context.Context, localIPOverride, gatewayOverride string, duration time.Duration) (*Client, error) {
+	var gw *gateway
 	var err error
 
 	if gatewayOverride != "" {
-		upnpClient, err = clientFromGateway(gatewayOverride)
+		gw, err = clientFromGateway(ctx, gatewayOverride)
 	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		discoverCtx, cancel := context.WithTimeout(ctx, discoveryTimeout)
 		defer cancel()
-		upnpClient, err = discoverGateway(ctx)
+		gw, err = discoverGateway(discoverCtx)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize UPnP client: %v", err)
+		return nil, fmt.Errorf("failed to initialize UPnP client: %w", err)
 	}
 
 	localIP := localIPOverride
 	if localIP == "" {
-		localIP, err = getLocalIP()
+		localIP, err = getLocalIP(gw.location, gw.localAddr)
 		if err != nil {
-			return nil, fmt.Errorf("failed to determine local IP: %v", err)
+			return nil, fmt.Errorf("failed to determine local IP: %w", err)
 		}
 	}
 
-	return NewClientWithConnection(upnpClient, localIP, duration), nil
+	return NewClientWithConnection(gw.conn, localIP, duration), nil
 }
 
 func NewClientWithConnection(connection UPnPConnection, localIP string, duration time.Duration) *Client {
@@ -101,57 +128,97 @@ func NewDummyClient(duration time.Duration) *Client {
 	return NewClientWithConnection(&DummyConnection{}, "192.168.1.100", duration)
 }
 
-func (u *Client) ForwardPorts(mappings []types.PortMapping) error {
-	for _, m := range mappings {
-		err := u.addPortMapping(m)
-		if err != nil {
-			log.Printf("Failed to forward port %d/%s for %s: %v", m.ExternalPort, m.Protocol, m.Name, err)
+// InternalIP returns the LAN address mappings are forwarded to.
+func (u *Client) InternalIP() string {
+	return u.LocalIP
+}
 
-			return err
+// Description returns the gateway description used for a mapping with the given name.
+func Description(name string) string {
+	if name == "" {
+		return DescriptionPrefix
+	}
+
+	return fmt.Sprintf("%s: %s", DescriptionPrefix, name)
+}
+
+// ForwardPorts adds all mappings, continuing past failures. Errors are joined.
+func (u *Client) ForwardPorts(ctx context.Context, mappings []types.PortMapping) error {
+	var errs []error
+	for _, m := range mappings {
+		if err := u.addPortMapping(ctx, m.Normalize()); err != nil {
+			log.Printf("Failed to forward port %d/%s for %s: %v", m.ExternalPort, m.Protocol, m.Name, err)
+			errs = append(errs, fmt.Errorf("forward %d/%s: %w", m.ExternalPort, m.Protocol, err))
 		} else {
 			log.Printf("Successfully forwarded port %d/%s for %s", m.ExternalPort, m.Protocol, m.Name)
 		}
 	}
-	return nil
+
+	return errors.Join(errs...)
 }
 
-func (u *Client) addPortMapping(m types.PortMapping) error {
-	description := defaultDescription
-	if m.Name != "" {
-		description = fmt.Sprintf("%s: %s", defaultDescription, m.Name)
+func (u *Client) addPortMapping(ctx context.Context, m types.PortMapping) error {
+	lease := uint32(0)
+	if !u.permanentOnly.Load() {
+		lease = uint32(max(0, min(u.duration.Seconds(), math.MaxUint32)))
 	}
-	return u.uPnPConnection.AddPortMapping(
+
+	err := u.add(ctx, m, lease)
+	if lease != 0 && hasErrorCode(err, errCodeOnlyPermanentLeasesSupported) {
+		log.Printf("Gateway only supports permanent leases, retrying without lease duration")
+		u.permanentOnly.Store(true)
+		err = u.add(ctx, m, 0)
+	}
+
+	return err
+}
+
+func (u *Client) add(ctx context.Context, m types.PortMapping, lease uint32) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	return u.uPnPConnection.AddPortMappingCtx(
+		ctx,
 		"",
 		uint16(m.ExternalPort),
 		m.Protocol,
 		uint16(m.InternalPort),
 		u.LocalIP,
 		true,
-		description,
-		uint32(u.duration.Seconds()),
+		Description(m.Name),
+		lease,
 	)
 }
 
-func (u *Client) DeletePortMapping(externalPort int, protocol string) error {
-	return u.uPnPConnection.DeletePortMapping("", uint16(externalPort), protocol)
+func (u *Client) DeletePortMapping(ctx context.Context, externalPort int, protocol string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	return u.uPnPConnection.DeletePortMappingCtx(ctx, "", uint16(externalPort), strings.ToUpper(protocol))
+}
+
+// GetExternalIP returns the WAN address reported by the gateway.
+func (u *Client) GetExternalIP(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
+	return u.uPnPConnection.GetExternalIPAddressCtx(ctx)
 }
 
 // ListPortMappings retrieves all active UPnP port mappings.
-func (c *Client) ListPortMappings() ([]PortMappingEntry, error) {
+func (u *Client) ListPortMappings(ctx context.Context) ([]PortMappingEntry, error) {
 	var mappings []PortMappingEntry
-	index := uint16(0)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	for {
-		_, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration, err := c.uPnPConnection.GetGenericPortMappingEntryCtx(ctx, index)
+	for index := 0; index <= math.MaxUint16; index++ {
+		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
+		_, externalPort, protocol, internalPort, internalClient, enabled, description, leaseDuration, err := u.uPnPConnection.GetGenericPortMappingEntryCtx(callCtx, uint16(index))
+		cancel()
 		if err != nil {
-			if serr, ok := err.(*soap.SOAPFaultError); ok && serr.Detail.UPnPError.ErrorDescription == "SpecifiedArrayIndexInvalid" {
+			if isEndOfList(err) {
 				break
 			}
 
-			return nil, fmt.Errorf("failed to get port mapping at index %d: %v", index, err)
+			return nil, fmt.Errorf("failed to get port mapping at index %d: %w", index, err)
 		}
 
 		mappings = append(mappings, PortMappingEntry{
@@ -163,41 +230,102 @@ func (c *Client) ListPortMappings() ([]PortMappingEntry, error) {
 			LeaseDuration: leaseDuration,
 			Enabled:       enabled,
 		})
-
-		index++
 	}
 
 	return mappings, nil
 }
 
-func discoverGateway(ctx context.Context) (UPnPConnection, error) {
-	if clients, _, err := internetgateway2.NewWANIPConnection2Clients(); err == nil && len(clients) > 0 {
-		return clients[0], nil
+// isEndOfList reports whether err signals the end of the generic port mapping table.
+// Gateways differ: most return 713, some 714, and a few only set the description.
+func isEndOfList(err error) bool {
+	var serr *soap.SOAPFaultError
+	if !errors.As(err, &serr) {
+		return false
 	}
-	if clients, _, err := internetgateway1.NewWANIPConnection1Clients(); err == nil && len(clients) > 0 {
-		return clients[0], nil
-	}
-	return nil, fmt.Errorf("no UPnP IGD found within timeout")
+
+	code := serr.Detail.UPnPError.Errorcode
+	desc := serr.Detail.UPnPError.ErrorDescription
+
+	return code == errCodeSpecifiedArrayIndexInvalid ||
+		code == errCodeNoSuchEntryInArray ||
+		desc == "SpecifiedArrayIndexInvalid" ||
+		desc == "NoSuchEntryInArray"
 }
 
-func clientFromGateway(gatewayURL string) (UPnPConnection, error) {
+func hasErrorCode(err error, code int) bool {
+	var serr *soap.SOAPFaultError
+	return errors.As(err, &serr) && serr.Detail.UPnPError.Errorcode == code
+}
+
+type gateway struct {
+	conn      UPnPConnection
+	location  *url.URL
+	localAddr net.IP
+}
+
+func discoverGateway(ctx context.Context) (*gateway, error) {
+	if clients, _, err := internetgateway2.NewWANIPConnection2ClientsCtx(ctx); err == nil && len(clients) > 0 {
+		return &gateway{clients[0], clients[0].Location, clients[0].LocalAddr()}, nil
+	}
+	if clients, _, err := internetgateway1.NewWANIPConnection1ClientsCtx(ctx); err == nil && len(clients) > 0 {
+		return &gateway{clients[0], clients[0].Location, clients[0].LocalAddr()}, nil
+	}
+	return nil, errors.New("no UPnP IGD found within timeout")
+}
+
+func clientFromGateway(ctx context.Context, gatewayURL string) (*gateway, error) {
 	location, err := url.Parse(gatewayURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid gateway URL: %v", err)
+		return nil, fmt.Errorf("invalid gateway URL: %w", err)
 	}
-	if igd2Clients, err := internetgateway2.NewWANIPConnection2ClientsByURL(location); err == nil && len(igd2Clients) > 0 {
-		return igd2Clients[0], nil
+	if location.Scheme == "" || location.Host == "" {
+		return nil, fmt.Errorf("invalid gateway URL %q: expected the IGD description URL, e.g. http://192.168.1.1:5000/rootDesc.xml", gatewayURL)
 	}
-	if igd1Clients, err := internetgateway1.NewWANIPConnection1ClientsByURL(location); err == nil && len(igd1Clients) > 0 {
-		return igd1Clients[0], nil
+	if clients, err := internetgateway2.NewWANIPConnection2ClientsByURLCtx(ctx, location); err == nil && len(clients) > 0 {
+		return &gateway{clients[0], location, nil}, nil
+	}
+	if clients, err := internetgateway1.NewWANIPConnection1ClientsByURLCtx(ctx, location); err == nil && len(clients) > 0 {
+		return &gateway{clients[0], location, nil}, nil
 	}
 	return nil, fmt.Errorf("no supported UPnP service found at %s", gatewayURL)
 }
 
-func getLocalIP() (string, error) {
+// getLocalIP returns the local address used to reach the gateway, so that
+// bridges (docker0, br-*), VPNs and other interfaces are not picked by mistake.
+func getLocalIP(location *url.URL, discoveredFrom net.IP) (string, error) {
+	if location != nil && location.Hostname() != "" {
+		if ip, err := routeSourceIP(location.Hostname()); err == nil {
+			return ip, nil
+		}
+	}
+
+	if ip4 := discoveredFrom.To4(); ip4 != nil && !ip4.IsUnspecified() && !ip4.IsLoopback() {
+		return ip4.String(), nil
+	}
+
+	return firstInterfaceIP()
+}
+
+func routeSourceIP(host string) (string, error) {
+	// Dialing UDP sends no packets; it only selects the route and source address.
+	conn, err := net.Dial("udp4", net.JoinHostPort(host, "1900"))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = conn.Close() }()
+
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP.IsUnspecified() || addr.IP.IsLoopback() {
+		return "", errors.New("no usable source address")
+	}
+
+	return addr.IP.String(), nil
+}
+
+func firstInterfaceIP() (string, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return "", fmt.Errorf("failed to get interface addresses: %v", err)
+		return "", fmt.Errorf("failed to get interface addresses: %w", err)
 	}
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
@@ -206,5 +334,5 @@ func getLocalIP() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("no valid local IP found")
+	return "", errors.New("no valid local IP found")
 }

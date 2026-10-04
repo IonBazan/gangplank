@@ -1,12 +1,13 @@
 package providers
 
 import (
+	"context"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/IonBazan/gangplank/internal/config"
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/IonBazan/gangplank/internal/upnp"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestConfigPortProvider_GetPortMappings(t *testing.T) {
@@ -38,9 +39,25 @@ func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 					{ExternalPort: 0, InternalPort: 80, Protocol: "TCP", Name: "invalid-port"},
 				},
 			},
-			wantPorts:   nil,
+			wantPorts:   []types.PortMapping{},
 			wantErr:     true,
 			errContains: "invalid port mapping at index 0",
+		},
+		{
+			name: "Invalid entry does not drop valid ones",
+			config: &config.Config{
+				Ports: []types.PortMapping{
+					{ExternalPort: 8080, InternalPort: 80, Protocol: "tcp", Name: "lowercase"},
+					{ExternalPort: 9000, InternalPort: 0, Protocol: "UDP", Name: "broken"},
+					{ExternalPort: 53, InternalPort: 53, Name: "default-protocol"},
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "lowercase"},
+				{ExternalPort: 53, InternalPort: 53, Protocol: "TCP", Name: "default-protocol"},
+			},
+			wantErr:     true,
+			errContains: "invalid port mapping at index 1",
 		},
 		{
 			name: "Invalid protocol",
@@ -49,7 +66,7 @@ func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 					{ExternalPort: 8080, InternalPort: 80, Protocol: "INVALID", Name: "invalid-protocol"},
 				},
 			},
-			wantPorts:   nil,
+			wantPorts:   []types.PortMapping{},
 			wantErr:     true,
 			errContains: "invalid port mapping at index 0",
 		},
@@ -75,21 +92,14 @@ func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			portProvider := NewConfigPortProvider(tt.config)
 
-			gotPorts, err := portProvider.GetPortMappings()
+			gotPorts, err := portProvider.GetPortMappings(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errContains)
-				assert.Nil(t, gotPorts)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.wantPorts, gotPorts)
 			}
-
-			if !tt.wantErr && len(gotPorts) > 0 {
-				client := upnp.NewDummyClient(upnp.DefaultLeaseDuration)
-				err := client.ForwardPorts(gotPorts)
-				assert.NoError(t, err, "Dummy client should not fail")
-			}
+			assert.Equal(t, tt.wantPorts, gotPorts)
 		})
 	}
 }

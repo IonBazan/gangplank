@@ -2,140 +2,197 @@ package providers
 
 import (
 	"context"
-	dockerevents "github.com/docker/docker/api/types/events"
+	"errors"
 	"log"
-	"strconv"
-	"strings"
+	"sync"
+	"time"
+
+	"github.com/moby/moby/api/types/container"
+	dockerevents "github.com/moby/moby/api/types/events"
+	"github.com/moby/moby/client"
 
 	"github.com/IonBazan/gangplank/internal/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
+)
+
+const (
+	defaultRetryDelay = time.Second
+	maxRetryDelay     = 30 * time.Second
 )
 
 // EventInspector defines the minimal interface for DockerEventPortProvider.
 type EventInspector interface {
-	Events(ctx context.Context, options dockerevents.ListOptions) (<-chan dockerevents.Message, <-chan error)
-	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
+	ContainerLister
+	Events(ctx context.Context, options client.EventsListOptions) client.EventsResult
+	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
+// DockerEventPortProvider emits mappings as containers start and stop.
+// It remembers what each container exposed when it started, because Docker
+// clears port bindings once a container stops.
 type DockerEventPortProvider struct {
-	dockerCli EventInspector
+	dockerCli  EventInspector
+	retryDelay time.Duration
+
+	mu      sync.Mutex
+	tracked map[string][]types.PortMapping
 }
 
 func NewDockerEventPortProvider(cli EventInspector) *DockerEventPortProvider {
-	return &DockerEventPortProvider{dockerCli: cli}
+	return &DockerEventPortProvider{
+		dockerCli:  cli,
+		retryDelay: defaultRetryDelay,
+		tracked:    map[string][]types.PortMapping{},
+	}
 }
 
-func (d *DockerEventPortProvider) GetPortMappings() ([]types.PortMapping, error) {
-	return nil, nil
-}
-
+// Listen streams Docker events until ctx is cancelled, reconnecting with
+// backoff when the stream fails. After a reconnect it resyncs running containers
+// so events missed while disconnected are not lost.
 func (d *DockerEventPortProvider) Listen(ctx context.Context, events PortEventChannels) {
-	filterArgs := filters.NewArgs(
-		filters.Arg("type", "container"),
-		filters.Arg("event", "start"),
-		filters.Arg("event", "stop"),
-		filters.Arg("event", "die"),
-	)
-	eventChan, errChan := d.dockerCli.Events(ctx, dockerevents.ListOptions{
-		Filters: filterArgs,
+	delay := d.retryDelay
+	first := true
+	for {
+		connected, err := d.listenOnce(ctx, events, !first)
+		if ctx.Err() != nil {
+			return
+		}
+		if connected {
+			first = false
+			delay = d.retryDelay
+		}
+		log.Printf("Docker event stream interrupted: %v, reconnecting in %s", err, delay)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, maxRetryDelay)
+	}
+}
+
+func (d *DockerEventPortProvider) listenOnce(ctx context.Context, events PortEventChannels, resync bool) (bool, error) {
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Subscribe before syncing so that no event falls between the two.
+	stream := d.dockerCli.Events(streamCtx, client.EventsListOptions{
+		Filters: make(client.Filters).
+			Add("type", string(dockerevents.ContainerEventType)).
+			Add("event", string(dockerevents.ActionStart), string(dockerevents.ActionStop), string(dockerevents.ActionDie)),
 	})
+
+	if err := d.sync(ctx, events, resync); err != nil {
+		return false, err
+	}
+
 	for {
 		select {
-		case event := <-eventChan:
+		case event, ok := <-stream.Messages:
+			if !ok {
+				return true, errors.New("event stream closed")
+			}
 			switch event.Action {
-			case "start":
-				if events.Add != nil {
-					go d.handleContainerStart(event.Actor.ID, events.Add)
-				}
-			case "stop", "die":
-				if events.Delete != nil {
-					go d.handleContainerStop(event.Actor.ID, events.Delete)
-				}
+			case dockerevents.ActionStart:
+				d.handleContainerStart(ctx, event.Actor.ID, events.Add)
+			case dockerevents.ActionStop, dockerevents.ActionDie:
+				d.handleContainerStop(ctx, event.Actor.ID, events.Delete)
 			}
-		case err := <-errChan:
-			if err != nil {
-				log.Printf("Error receiving Docker events: %v", err)
-				return
+		case err := <-stream.Err:
+			if err == nil {
+				err = errors.New("event stream closed")
 			}
+			return true, err
+		case <-ctx.Done():
+			return true, nil
+		}
+	}
+}
+
+// sync records the mappings of running containers. When emit is set, it also
+// reports containers that started or stopped since the previous sync.
+func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChannels, emit bool) error {
+	current, err := listContainerMappings(ctx, d.dockerCli)
+	if err != nil {
+		return err
+	}
+
+	running := make(map[string]bool, len(current))
+	for _, ctr := range current {
+		running[ctr.id] = true
+		d.mu.Lock()
+		_, known := d.tracked[ctr.id]
+		d.tracked[ctr.id] = ctr.mappings
+		d.mu.Unlock()
+		if emit && !known {
+			send(ctx, events.Add, ctr.mappings)
+		}
+	}
+
+	d.mu.Lock()
+	var stopped []types.PortMapping
+	for id, mappings := range d.tracked {
+		if !running[id] {
+			stopped = append(stopped, mappings...)
+			delete(d.tracked, id)
+		}
+	}
+	d.mu.Unlock()
+	if emit {
+		send(ctx, events.Delete, stopped)
+	}
+
+	return nil
+}
+
+func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, containerID string, addCh chan<- types.PortMapping) {
+	result, err := d.dockerCli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
+	if err != nil {
+		log.Printf("Failed to inspect container %s: %v", shortID(containerID), err)
+		return
+	}
+	info := result.Container
+
+	var labels map[string]string
+	if info.Config != nil {
+		labels = info.Config.Labels
+	}
+
+	mappings := extractPortsFromContainer(container.Summary{
+		ID:     containerID,
+		Names:  []string{info.Name},
+		Labels: labels,
+		Ports:  portsFromInspect(info),
+	})
+
+	d.mu.Lock()
+	d.tracked[containerID] = mappings
+	d.mu.Unlock()
+
+	send(ctx, addCh, mappings)
+}
+
+func (d *DockerEventPortProvider) handleContainerStop(ctx context.Context, containerID string, deleteCh chan<- types.PortMapping) {
+	// Both "stop" and "die" fire for one container; only the first finds it tracked.
+	d.mu.Lock()
+	mappings, ok := d.tracked[containerID]
+	delete(d.tracked, containerID)
+	d.mu.Unlock()
+
+	if ok {
+		send(ctx, deleteCh, mappings)
+	}
+}
+
+func send(ctx context.Context, ch chan<- types.PortMapping, mappings []types.PortMapping) {
+	if ch == nil {
+		return
+	}
+	for _, m := range mappings {
+		select {
+		case ch <- m:
 		case <-ctx.Done():
 			return
 		}
-	}
-}
-
-func (d *DockerEventPortProvider) handleContainerStart(containerID string, addCh chan<- types.PortMapping) {
-	info, err := d.dockerCli.ContainerInspect(context.Background(), containerID)
-	if err != nil {
-		log.Printf("Failed to inspect container %s: %v", containerID[:12], err)
-		return
-	}
-
-	var ports []container.Port
-	for portProto, bindings := range info.NetworkSettings.Ports {
-		for _, binding := range bindings {
-			if binding.HostPort == "" {
-				continue
-			}
-			extPort, _ := strconv.Atoi(binding.HostPort)
-			ports = append(ports, container.Port{
-				PrivatePort: uint16(portProto.Int()),
-				PublicPort:  uint16(extPort),
-				Type:        portProto.Proto(),
-			})
-		}
-	}
-
-	ctr := container.Summary{
-		ID:     info.ID,
-		Labels: info.Config.Labels,
-		Ports:  ports,
-	}
-	mappings := extractPortsFromContainer(ctr)
-	for _, m := range mappings {
-		if info.Name != "" {
-			m.Name = strings.TrimPrefix(info.Name, "/")
-		} else {
-			m.Name = containerID[:12]
-		}
-		addCh <- m
-	}
-}
-
-func (d *DockerEventPortProvider) handleContainerStop(containerID string, deleteCh chan<- types.PortMapping) {
-	info, err := d.dockerCli.ContainerInspect(context.Background(), containerID)
-	if err != nil {
-		log.Printf("Failed to inspect container %s: %v", containerID[:12], err)
-		return
-	}
-
-	var ports []container.Port
-	for portProto, bindings := range info.NetworkSettings.Ports {
-		for _, binding := range bindings {
-			if binding.HostPort == "" {
-				continue
-			}
-			extPort, _ := strconv.Atoi(binding.HostPort)
-			ports = append(ports, container.Port{
-				PrivatePort: uint16(portProto.Int()),
-				PublicPort:  uint16(extPort),
-				Type:        portProto.Proto(),
-			})
-		}
-	}
-
-	ctr := container.Summary{
-		ID:     info.ID,
-		Labels: info.Config.Labels,
-		Ports:  ports,
-	}
-	mappings := extractPortsFromContainer(ctr)
-	for _, m := range mappings {
-		if info.Name != "" {
-			m.Name = strings.TrimPrefix(info.Name, "/")
-		} else {
-			m.Name = containerID[:12]
-		}
-		deleteCh <- m
 	}
 }

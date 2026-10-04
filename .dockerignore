@@ -1,0 +1,10 @@
+.git
+.github
+*.md
+doc
+logo.png
+coverage.*
+*.cov
+dist
+config.yaml
+config.yml

@@ -3,13 +3,15 @@ package internal
 import (
 	"context"
 	"errors"
-	"github.com/IonBazan/gangplank/internal/providers"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/IonBazan/gangplank/internal/providers"
 	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/IonBazan/gangplank/internal/upnp"
-	"github.com/stretchr/testify/assert"
 )
 
 type MockPortProvider struct {
@@ -17,7 +19,7 @@ type MockPortProvider struct {
 	Err   error
 }
 
-func (m *MockPortProvider) GetPortMappings() ([]types.PortMapping, error) {
+func (m *MockPortProvider) GetPortMappings(ctx context.Context) ([]types.PortMapping, error) {
 	return m.Ports, m.Err
 }
 
@@ -27,21 +29,28 @@ type MockEventPortProvider struct {
 }
 
 func (m *MockEventPortProvider) Listen(ctx context.Context, events providers.PortEventChannels) {
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case p := <-m.AddCh:
-				events.Add <- p
-			case p := <-m.DeleteCh:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case p := <-m.AddCh:
+			events.Add <- p
+		case p := <-m.DeleteCh:
+			if events.Delete != nil {
 				events.Delete <- p
 			}
 		}
-	}()
+	}
+}
+
+func newClient(conn *upnp.DummyConnection) *upnp.Client {
+	return upnp.NewClientWithConnection(conn, "192.168.1.100", upnp.DefaultLeaseDuration)
 }
 
 func TestGangplank_GetPortMappings(t *testing.T) {
+	web := types.PortMapping{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}
+	db := types.PortMapping{ExternalPort: 5432, InternalPort: 5432, Protocol: "TCP", Name: "db"}
+
 	tests := []struct {
 		name          string
 		portProviders []providers.PortProvider
@@ -51,13 +60,10 @@ func TestGangplank_GetPortMappings(t *testing.T) {
 		{
 			name: "Multiple PortProviders",
 			portProviders: []providers.PortProvider{
-				&MockPortProvider{Ports: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}}},
-				&MockPortProvider{Ports: []types.PortMapping{{ExternalPort: 5432, InternalPort: 5432, Protocol: "TCP", Name: "db"}}},
+				&MockPortProvider{Ports: []types.PortMapping{web}},
+				&MockPortProvider{Ports: []types.PortMapping{db}},
 			},
-			wantPorts: []types.PortMapping{
-				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"},
-				{ExternalPort: 5432, InternalPort: 5432, Protocol: "TCP", Name: "db"},
-			},
+			wantPorts: []types.PortMapping{web, db},
 		},
 		{
 			name:          "Empty PortProviders",
@@ -65,155 +71,178 @@ func TestGangplank_GetPortMappings(t *testing.T) {
 			wantPorts:     []types.PortMapping{},
 		},
 		{
-			name: "Provider error",
+			name: "Provider error keeps other providers' mappings",
 			portProviders: []providers.PortProvider{
-				&MockPortProvider{Err: errors.New("Get port mappings error")},
+				&MockPortProvider{Ports: []types.PortMapping{web}},
+				&MockPortProvider{Err: errors.New("docker unavailable")},
 			},
-			wantErr: true,
+			wantPorts: []types.PortMapping{web},
+			wantErr:   true,
+		},
+		{
+			name: "Conflicting mappings keep the first",
+			portProviders: []providers.PortProvider{
+				&MockPortProvider{Ports: []types.PortMapping{web}},
+				&MockPortProvider{Ports: []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "tcp", Name: "other"}}},
+			},
+			wantPorts: []types.PortMapping{web},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := &Gangplank{
-				PortProviders: tt.portProviders,
-			}
-			ports, err := g.GetPortMappings()
+			g := &Gangplank{PortProviders: tt.portProviders}
+			ports, err := g.GetPortMappings(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.wantPorts, ports)
 			}
+			assert.Equal(t, tt.wantPorts, ports)
 		})
 	}
 }
 
 func TestGangplank_ForwardPorts(t *testing.T) {
-	tests := []struct {
-		name       string
-		upnpClient *upnp.Client
-		ports      []types.PortMapping
-		wantErr    bool
-		wantMapped []types.PortMapping
-	}{
-		{
-			name:  "No UPnP client",
-			ports: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
-		},
-		{
-			name:       "Forward ports successfully",
-			ports:      []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
-			wantMapped: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: web"}},
-		},
-		{
-			name:    "Forward with error",
-			ports:   []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
-			wantErr: true,
-		},
-	}
+	ports := []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockConnection := &upnp.DummyConnection{}
-			var upnpClient *upnp.Client
-			if tt.name != "No UPnP client" {
-				if tt.wantErr {
-					mockConnection.ForwardErr = errors.New("forward error")
-				}
-				upnpClient = upnp.NewClientWithConnection(mockConnection, "192.168.1.100", upnp.DefaultLeaseDuration)
-			}
+	t.Run("No UPnP client", func(t *testing.T) {
+		g := &Gangplank{}
+		assert.NoError(t, g.ForwardPorts(context.Background(), ports))
+	})
 
-			g := &Gangplank{
-				upnpClient: upnpClient,
-			}
-			err := g.ForwardPorts(tt.ports)
+	t.Run("Forward ports successfully", func(t *testing.T) {
+		conn := &upnp.DummyConnection{}
+		g := &Gangplank{}
+		g.SetForwarder(newClient(conn))
 
-			if tt.wantErr {
-				assert.Error(t, err)
-				assert.Equal(t, mockConnection.ForwardErr, err)
-			} else {
-				assert.NoError(t, err)
-			}
+		assert.NoError(t, g.ForwardPorts(context.Background(), ports))
+		forwarded, _ := conn.Snapshot()
+		assert.Equal(t, []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: web"}}, forwarded)
+	})
 
-			if tt.upnpClient != nil {
-				assert.Equal(t, tt.wantMapped, mockConnection.Forwarded)
-			}
-		})
-	}
+	t.Run("Forward with error", func(t *testing.T) {
+		conn := &upnp.DummyConnection{ForwardErr: errors.New("forward error")}
+		g := &Gangplank{}
+		g.SetForwarder(newClient(conn))
+
+		assert.ErrorIs(t, g.ForwardPorts(context.Background(), ports), conn.ForwardErr)
+	})
+}
+
+func TestGangplank_SyncPrunesStaleMappings(t *testing.T) {
+	conn := &upnp.DummyConnection{Existing: []upnp.PortMappingEntry{
+		{ExternalPort: 80, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: web"},
+		{ExternalPort: 81, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: removed"},
+		{ExternalPort: 82, Protocol: "TCP", InternalIP: "192.168.1.200", Description: "Gangplank UPnP: other host"},
+		{ExternalPort: 83, Protocol: "UDP", InternalIP: "192.168.1.100", Description: "Plex"},
+	}}
+	g := &Gangplank{}
+	g.SetForwarder(newClient(conn))
+
+	desired := []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}}
+
+	require.NoError(t, g.Sync(context.Background(), desired, false))
+	_, deleted := conn.Snapshot()
+	assert.Empty(t, deleted, "nothing is pruned unless asked")
+
+	require.NoError(t, g.Sync(context.Background(), desired, true))
+	_, deleted = conn.Snapshot()
+	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 81, Protocol: "TCP"}}, deleted)
+}
+
+func TestGangplank_Cleanup(t *testing.T) {
+	conn := &upnp.DummyConnection{}
+	g := &Gangplank{}
+	g.SetForwarder(newClient(conn))
+
+	require.NoError(t, g.Sync(context.Background(), []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "tcp", Name: "web"}}, false))
+	require.NoError(t, g.Cleanup(context.Background()))
+
+	_, deleted := conn.Snapshot()
+	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 80, Protocol: "TCP"}}, deleted)
 }
 
 func TestGangplank_PollAndForward(t *testing.T) {
+	web := types.PortMapping{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}
+	minecraft := types.PortMapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "minecraft"}
+
 	tests := []struct {
 		name        string
-		upnpClient  *upnp.Client
+		withUPnP    bool
 		cleanup     bool
 		addEvents   []types.PortMapping
 		delEvents   []types.PortMapping
 		wantAdded   []types.PortMapping
-		wantDeleted []struct {
-			ExtPort  uint16
-			Protocol string
-		}
+		wantDeleted []upnp.DeletedMapping
 	}{
 		{
 			name:      "Poll without UPnP",
-			addEvents: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
+			addEvents: []types.PortMapping{web},
 		},
 		{
 			name:      "Poll and forward",
-			addEvents: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
+			withUPnP:  true,
+			addEvents: []types.PortMapping{web},
 			wantAdded: []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: web"}},
 		},
 		{
-			name:      "Poll with cleanup",
-			cleanup:   true,
-			delEvents: []types.PortMapping{{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "minecraft"}},
-			wantDeleted: []struct {
-				ExtPort  uint16
-				Protocol string
-			}{{ExtPort: 25565, Protocol: "TCP"}},
+			name:        "Poll with cleanup",
+			withUPnP:    true,
+			cleanup:     true,
+			delEvents:   []types.PortMapping{minecraft},
+			wantDeleted: []upnp.DeletedMapping{{ExtPort: 25565, Protocol: "TCP"}},
+		},
+		{
+			name:      "Poll without cleanup ignores stops",
+			withUPnP:  true,
+			delEvents: []types.PortMapping{minecraft},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockConnection := &upnp.DummyConnection{}
-			var upnpClient *upnp.Client
-			if tt.name != "Poll without UPnP" {
-				upnpClient = upnp.NewClientWithConnection(mockConnection, "192.168.1.100", upnp.DefaultLeaseDuration)
+			conn := &upnp.DummyConnection{}
+			g := &Gangplank{}
+			if tt.withUPnP {
+				g.SetForwarder(newClient(conn))
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			eventPortProvider := &MockEventPortProvider{
+			provider := &MockEventPortProvider{
 				AddCh:    make(chan types.PortMapping, len(tt.addEvents)),
 				DeleteCh: make(chan types.PortMapping, len(tt.delEvents)),
 			}
-
 			for _, p := range tt.addEvents {
-				eventPortProvider.AddCh <- p
+				provider.AddCh <- p
 			}
 			for _, p := range tt.delEvents {
-				eventPortProvider.DeleteCh <- p
+				provider.DeleteCh <- p
 			}
+			g.EventPortProviders = []providers.EventPortProvider{provider}
 
-			g := &Gangplank{
-				EventPortProviders: []providers.EventPortProvider{eventPortProvider},
-				upnpClient:         upnpClient,
-			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				g.PollAndForward(ctx, tt.cleanup)
+				close(done)
+			}()
 
-			go g.PollAndForward(ctx, tt.cleanup)
-
-			time.Sleep(500 * time.Millisecond)
+			assert.Eventually(t, func() bool {
+				forwarded, deleted := conn.Snapshot()
+				return len(forwarded) == len(tt.wantAdded) && len(deleted) == len(tt.wantDeleted) &&
+					len(provider.AddCh) == 0 && len(provider.DeleteCh) == 0
+			}, time.Second, 5*time.Millisecond)
 
 			cancel()
-
-			if tt.upnpClient != nil {
-				assert.Equal(t, tt.wantAdded, mockConnection.Forwarded)
-				assert.Equal(t, tt.wantDeleted, mockConnection.Deleted)
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("PollAndForward did not return after cancel")
 			}
+
+			forwarded, deleted := conn.Snapshot()
+			assert.Equal(t, tt.wantAdded, forwarded)
+			assert.Equal(t, tt.wantDeleted, deleted)
 		})
 	}
 }

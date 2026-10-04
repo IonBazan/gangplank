@@ -2,15 +2,17 @@ package providers
 
 import (
 	"context"
+
 	"github.com/IonBazan/gangplank/internal/types"
 )
 
 // PortProvider is for static port mapping retrieval.
 type PortProvider interface {
-	GetPortMappings() ([]types.PortMapping, error)
+	GetPortMappings(ctx context.Context) ([]types.PortMapping, error)
 }
 
 // EventPortProvider is for event-driven port mapping retrieval using channels.
+// Listen blocks until ctx is cancelled. A nil channel disables that event kind.
 type EventPortProvider interface {
 	Listen(ctx context.Context, events PortEventChannels)
 }
