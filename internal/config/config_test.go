@@ -69,6 +69,30 @@ func TestLoadConfig_IgnoresGenericConfigFile(t *testing.T) {
 	assert.Nil(t, cfg)
 }
 
+func TestLoadConfig_LegacyDefaultFile(t *testing.T) {
+	for _, name := range []string{"config.yaml", "config.yml"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("ttl: 5m\n"), 0o600))
+			t.Chdir(dir)
+
+			_, err := Load("")
+			assert.ErrorContains(t, err, name+" is no longer read by default: rename it to gangplank.yaml")
+		})
+	}
+}
+
+func TestLoadConfig_PrefersNewDefaultOverLegacy(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("ttl: 5m\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gangplank.yaml"), []byte("ttl: 2h\n"), 0o600))
+	t.Chdir(dir)
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, new(2*time.Hour), cfg.TTL)
+}
+
 func TestLoadConfig_DefaultLocationMissing(t *testing.T) {
 	t.Chdir(t.TempDir())
 

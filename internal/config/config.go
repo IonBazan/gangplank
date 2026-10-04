@@ -16,6 +16,9 @@ import (
 // DefaultFiles are looked up in the working directory when no file is given.
 var DefaultFiles = []string{"gangplank.yaml", "gangplank.yml"}
 
+// legacyFiles were the default files before. They are only reported, never used.
+var legacyFiles = []string{"config.yaml", "config.yml"}
+
 type Config struct {
 	TTL             *time.Duration    `yaml:"ttl"`
 	Gateway         string            `yaml:"gateway"`
@@ -25,7 +28,8 @@ type Config struct {
 }
 
 // Load reads the given file. With an empty path it tries DefaultFiles and
-// returns nil without an error when none of them exists.
+// returns nil without an error when none of them exists, unless a legacy
+// config.yaml with Gangplank settings is found.
 func Load(path string) (*Config, error) {
 	if path != "" {
 		return read(path)
@@ -37,6 +41,13 @@ func Load(path string) (*Config, error) {
 			continue
 		}
 		return cfg, err
+	}
+
+	// A file that is not a valid Gangplank config belongs to something else.
+	for _, name := range legacyFiles {
+		if _, err := read(name); err == nil {
+			return nil, fmt.Errorf("%s is no longer read by default: rename it to gangplank.yaml or pass it with --config", name)
+		}
 	}
 
 	return nil, nil

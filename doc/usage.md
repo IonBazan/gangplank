@@ -93,6 +93,7 @@ List the ports with `gangplank.forward` instead, for example `gangplank.forward:
 
 For services outside Docker, list the ports in a YAML file.
 Gangplank reads `gangplank.yaml` from its working directory (`/app/gangplank.yaml` in the image), or the file given with `--config`.
+Older versions read `config.yaml` instead. Gangplank stops with an error if it finds one with Gangplank settings, so rename it to `gangplank.yaml`.
 
 ```yaml
 ports:
