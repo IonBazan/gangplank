@@ -16,6 +16,9 @@ It is made for homelabs and self-hosted setups: media servers, game servers, Nex
 
 > **Gangplank** (nautical): a movable board used to get on or off a ship, bridging the gap between ship and shore.
 
+> [!WARNING]
+> Gangplank is in active development and configuration may change often. Please make sure to carefully read the [release notes](https://github.com/IonBazan/gangplank/releases) before updating.
+
 ## Why Gangplank?
 
 - **No router admin pages.** Gangplank talks to your router for you.
