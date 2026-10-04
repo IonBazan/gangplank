@@ -1,4 +1,4 @@
-package internal
+package gangplank
 
 import (
 	"context"
@@ -9,13 +9,13 @@ import (
 	"sync"
 
 	"github.com/IonBazan/gangplank/internal/config"
+	"github.com/IonBazan/gangplank/internal/portmap"
 	"github.com/IonBazan/gangplank/internal/providers"
-	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/IonBazan/gangplank/internal/upnp"
 )
 
-type Forwarder interface {
-	ForwardPorts(ctx context.Context, mappings []types.PortMapping) error
+type Gateway interface {
+	ForwardPorts(ctx context.Context, mappings []portmap.Mapping) error
 	DeletePortMapping(ctx context.Context, externalPort int, protocol string) error
 	ListPortMappings(ctx context.Context) ([]upnp.PortMappingEntry, error)
 	InternalIP() string
@@ -25,17 +25,17 @@ type DockerClient interface {
 	providers.EventInspector
 }
 
-type Gangplank struct {
+type Manager struct {
 	PortProviders      []providers.PortProvider
 	EventPortProviders []providers.EventPortProvider
 
 	mu        sync.Mutex
-	upnp      Forwarder
-	forwarded map[string]types.PortMapping
+	gw        Gateway
+	forwarded map[string]portmap.Mapping
 }
 
-func NewGangplank(cfg *config.Config, dockerCli DockerClient) *Gangplank {
-	return &Gangplank{
+func NewManager(cfg *config.Config, dockerCli DockerClient) *Manager {
+	return &Manager{
 		PortProviders: []providers.PortProvider{
 			providers.NewConfigPortProvider(cfg),
 			providers.NewDockerPortProvider(dockerCli),
@@ -46,31 +46,31 @@ func NewGangplank(cfg *config.Config, dockerCli DockerClient) *Gangplank {
 	}
 }
 
-func (g *Gangplank) SetForwarder(f Forwarder) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.upnp = f
+func (mgr *Manager) SetGateway(gw Gateway) {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	mgr.gw = gw
 }
 
-func (g *Gangplank) HasForwarder() bool {
-	return g.forwarder() != nil
+func (mgr *Manager) HasGateway() bool {
+	return mgr.gateway() != nil
 }
 
-func (g *Gangplank) forwarder() Forwarder {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.upnp
+func (mgr *Manager) gateway() Gateway {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+	return mgr.gw
 }
 
 // A failing provider does not drop the others' mappings. When several sources
 // claim the same external port and protocol, the first one wins.
-func (g *Gangplank) GetPortMappings(ctx context.Context) ([]types.PortMapping, error) {
+func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, error) {
 	log.Println("Fetching port mappings...")
-	allPorts := []types.PortMapping{}
+	allPorts := []portmap.Mapping{}
 	owners := map[string]string{}
 	var errs []error
 
-	for _, portProvider := range g.PortProviders {
+	for _, portProvider := range mgr.PortProviders {
 		ports, err := portProvider.GetPortMappings(ctx)
 		if err != nil {
 			log.Printf("Error fetching port mappings: %v", err)
@@ -93,69 +93,69 @@ func (g *Gangplank) GetPortMappings(ctx context.Context) ([]types.PortMapping, e
 	return allPorts, errors.Join(errs...)
 }
 
-func (g *Gangplank) ForwardPorts(ctx context.Context, ports []types.PortMapping) error {
-	f := g.forwarder()
-	if f == nil {
+func (mgr *Manager) ForwardPorts(ctx context.Context, ports []portmap.Mapping) error {
+	gw := mgr.gateway()
+	if gw == nil {
 		log.Println("UPnP client is not initialized, skipping port forwarding.")
 		return nil
 	}
 
-	err := f.ForwardPorts(ctx, ports)
-	g.mu.Lock()
-	if g.forwarded == nil {
-		g.forwarded = map[string]types.PortMapping{}
+	err := gw.ForwardPorts(ctx, ports)
+	mgr.mu.Lock()
+	if mgr.forwarded == nil {
+		mgr.forwarded = map[string]portmap.Mapping{}
 	}
 	for _, p := range ports {
 		p = p.Normalize()
-		g.forwarded[p.Key()] = p
+		mgr.forwarded[p.Key()] = p
 	}
-	g.mu.Unlock()
+	mgr.mu.Unlock()
 
 	return err
 }
 
 // With prune, Gangplank mappings for this host that are no longer desired are deleted.
-func (g *Gangplank) Sync(ctx context.Context, desired []types.PortMapping, prune bool) error {
-	if g.forwarder() == nil {
+func (mgr *Manager) Sync(ctx context.Context, desired []portmap.Mapping, prune bool) error {
+	if mgr.gateway() == nil {
 		log.Println("UPnP client is not initialized, skipping port forwarding.")
 		return nil
 	}
 
-	err := g.ForwardPorts(ctx, desired)
+	err := mgr.ForwardPorts(ctx, desired)
 
-	g.mu.Lock()
-	keep := make(map[string]types.PortMapping, len(desired))
+	mgr.mu.Lock()
+	keep := make(map[string]portmap.Mapping, len(desired))
 	for _, p := range desired {
 		p = p.Normalize()
 		keep[p.Key()] = p
 	}
-	g.forwarded = keep
-	g.mu.Unlock()
+	mgr.forwarded = keep
+	mgr.mu.Unlock()
 
 	if prune {
-		err = errors.Join(err, g.prune(ctx, keep))
+		err = errors.Join(err, mgr.prune(ctx, keep))
 	}
 
 	return err
 }
 
-func (g *Gangplank) prune(ctx context.Context, keep map[string]types.PortMapping) error {
-	f := g.forwarder()
-	entries, err := f.ListPortMappings(ctx)
+func (mgr *Manager) prune(ctx context.Context, keep map[string]portmap.Mapping) error {
+	gw := mgr.gateway()
+	entries, err := gw.ListPortMappings(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list gateway mappings: %w", err)
 	}
 
 	var errs []error
 	for _, e := range entries {
-		if !e.IsOwned() || e.InternalIP != f.InternalIP() {
+		if !e.IsOwned() || e.InternalIP != gw.InternalIP() {
 			continue
 		}
-		key := types.PortMapping{ExternalPort: e.ExternalPort, Protocol: strings.ToUpper(e.Protocol)}.Key()
+		key := portmap.Mapping{ExternalPort: e.ExternalPort, Protocol: strings.ToUpper(e.Protocol)}.Key()
 		if _, ok := keep[key]; ok {
 			continue
 		}
-		if err := f.DeletePortMapping(ctx, e.ExternalPort, e.Protocol); err != nil {
+		if err := gw.DeletePortMapping(ctx, e.ExternalPort, e.Protocol); err != nil {
 			errs = append(errs, fmt.Errorf("prune %s: %w", key, err))
 			continue
 		}
@@ -165,23 +165,23 @@ func (g *Gangplank) prune(ctx context.Context, keep map[string]types.PortMapping
 	return errors.Join(errs...)
 }
 
-func (g *Gangplank) Cleanup(ctx context.Context) error {
-	f := g.forwarder()
-	if f == nil {
+func (mgr *Manager) Cleanup(ctx context.Context) error {
+	gw := mgr.gateway()
+	if gw == nil {
 		return nil
 	}
 
-	g.mu.Lock()
-	mappings := make([]types.PortMapping, 0, len(g.forwarded))
-	for _, m := range g.forwarded {
+	mgr.mu.Lock()
+	mappings := make([]portmap.Mapping, 0, len(mgr.forwarded))
+	for _, m := range mgr.forwarded {
 		mappings = append(mappings, m)
 	}
-	g.forwarded = nil
-	g.mu.Unlock()
+	mgr.forwarded = nil
+	mgr.mu.Unlock()
 
 	var errs []error
 	for _, m := range mappings {
-		if err := f.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
+		if err := gw.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
 			errs = append(errs, fmt.Errorf("delete %s: %w", m.Key(), err))
 			continue
 		}
@@ -191,15 +191,15 @@ func (g *Gangplank) Cleanup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (g *Gangplank) PollAndForward(ctx context.Context, cleanup bool) {
-	addCh := make(chan types.PortMapping)
-	var deleteCh chan types.PortMapping
+func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool) {
+	addCh := make(chan portmap.Mapping)
+	var deleteCh chan portmap.Mapping
 	if cleanup {
-		deleteCh = make(chan types.PortMapping)
+		deleteCh = make(chan portmap.Mapping)
 	}
 
 	var wg sync.WaitGroup
-	for _, provider := range g.EventPortProviders {
+	for _, provider := range mgr.EventPortProviders {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -214,27 +214,27 @@ func (g *Gangplank) PollAndForward(ctx context.Context, cleanup bool) {
 			return
 		case p := <-addCh:
 			log.Printf("New container port mapping (Container: %s): External=%d, Internal=%d, Protocol=%s", p.Name, p.ExternalPort, p.InternalPort, p.Protocol)
-			if err := g.ForwardPorts(ctx, []types.PortMapping{p}); err != nil {
+			if err := mgr.ForwardPorts(ctx, []portmap.Mapping{p}); err != nil {
 				log.Printf("Error forwarding new port: %v", err)
 			}
 		case m := <-deleteCh:
-			g.delete(ctx, m)
+			mgr.delete(ctx, m)
 		}
 	}
 }
 
-func (g *Gangplank) delete(ctx context.Context, m types.PortMapping) {
-	f := g.forwarder()
-	if f == nil {
+func (mgr *Manager) delete(ctx context.Context, m portmap.Mapping) {
+	gw := mgr.gateway()
+	if gw == nil {
 		return
 	}
 
 	m = m.Normalize()
-	g.mu.Lock()
-	delete(g.forwarded, m.Key())
-	g.mu.Unlock()
+	mgr.mu.Lock()
+	delete(mgr.forwarded, m.Key())
+	mgr.mu.Unlock()
 
-	if err := f.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
+	if err := gw.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
 		log.Printf("Failed to delete port mapping %s for %s: %v", m.Key(), m.Name, err)
 	} else {
 		log.Printf("Deleted port mapping %s for %s", m.Key(), m.Name)

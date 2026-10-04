@@ -7,7 +7,7 @@ import (
 
 	"github.com/moby/moby/client"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 type ContainerLister interface {
@@ -22,14 +22,14 @@ func NewDockerPortProvider(cli ContainerLister) *DockerPortProvider {
 	return &DockerPortProvider{dockerCli: cli}
 }
 
-func (d *DockerPortProvider) GetPortMappings(ctx context.Context) ([]types.PortMapping, error) {
+func (d *DockerPortProvider) GetPortMappings(ctx context.Context) ([]portmap.Mapping, error) {
 	byContainer, err := listContainerMappings(ctx, d.dockerCli)
 	if err != nil {
 		return nil, err
 	}
 
 	// Sorted so that conflicts between containers always resolve the same way.
-	var mappings []types.PortMapping
+	var mappings []portmap.Mapping
 	for _, ctr := range byContainer {
 		mappings = append(mappings, ctr.mappings...)
 	}
@@ -48,7 +48,7 @@ func (d *DockerPortProvider) GetPortMappings(ctx context.Context) ([]types.PortM
 
 type containerMappings struct {
 	id       string
-	mappings []types.PortMapping
+	mappings []portmap.Mapping
 }
 
 func listContainerMappings(ctx context.Context, cli ContainerLister) ([]containerMappings, error) {

@@ -9,53 +9,42 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/IonBazan/gangplank/internal"
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/gangplank"
 )
 
-var (
-	forwardCmd = &cobra.Command{
+func (a *app) forwardCmd() *cobra.Command {
+	return &cobra.Command{
 		Use:   "forward",
 		Short: "Fetch and forward port mappings",
 		Long:  `Fetches port mappings from Docker and YAML sources and forwards them via UPnP with Gangplank.`,
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
 			log.Println("Starting Gangplank...")
-			dockerCli, err := NewDockerClient()
+			dockerCli, err := a.newDocker()
 			if err != nil {
 				return err
 			}
 			defer func() { _ = dockerCli.Close() }()
 
-			gp := internal.NewGangplank(cfg, dockerCli)
-			ports, fetchErr := gp.GetPortMappings(ctx)
-			listPorts(ports)
+			manager := gangplank.NewManager(a.cfg, dockerCli)
+			ports, fetchErr := manager.GetPortMappings(ctx)
+			gangplank.LogMappings(ports)
 
-			upnpClient, err := SetupUPnPClient(ctx)
+			gateway, err := a.connectGateway(ctx)
 			if err != nil {
 				return errors.Join(fetchErr, err)
 			}
-			log.Printf("UPnP client initialized with local IP: %s", upnpClient.LocalIP)
-			gp.SetForwarder(upnpClient)
+			log.Printf("UPnP client initialized with local IP: %s", gateway.InternalIP())
+			manager.SetGateway(gateway)
 
-			if err := gp.ForwardPorts(ctx, ports); err != nil {
+			if err := manager.ForwardPorts(ctx, ports); err != nil {
 				return errors.Join(fetchErr, fmt.Errorf("some port mappings could not be applied: %w", err))
 			}
 
 			return fetchErr
 		},
-	}
-)
-
-func listPorts(ports []types.PortMapping) {
-	for _, p := range ports {
-		if p.Name != "" {
-			log.Printf("Port Mapping (Container: %s): External=%d, Internal=%d, Protocol=%s\n", p.Name, p.ExternalPort, p.InternalPort, p.Protocol)
-		} else {
-			log.Printf("Port Mapping: External=%d, Internal=%d, Protocol=%s\n", p.ExternalPort, p.InternalPort, p.Protocol)
-		}
 	}
 }

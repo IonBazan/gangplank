@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 	"github.com/IonBazan/gangplank/internal/upnp/upnptest"
 )
 
@@ -22,7 +22,7 @@ func TestNewClient_WithGateway(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "192.168.1.50", client.InternalIP())
 
-	err = client.ForwardPorts(ctx, []types.PortMapping{
+	err = client.ForwardPorts(ctx, []portmap.Mapping{
 		{ExternalPort: 443, InternalPort: 8443, Protocol: "tcp", Name: "web"},
 		{ExternalPort: 53, InternalPort: 53, Protocol: "UDP"},
 	})
@@ -57,7 +57,7 @@ func TestNewClient_PermanentLeasesOnly(t *testing.T) {
 	client, err := NewClient(context.Background(), "192.168.1.50", igd.URL(), time.Hour)
 	require.NoError(t, err)
 
-	require.NoError(t, client.ForwardPorts(context.Background(), []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
+	require.NoError(t, client.ForwardPorts(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
 	require.Len(t, igd.Mappings(), 1)
 	assert.Equal(t, 0, igd.Mappings()[0].Lease)
 }
@@ -142,7 +142,7 @@ func TestClient_ForwardPorts_LeaseClamp(t *testing.T) {
 	conn := &DummyConnection{}
 	client := NewClientWithConnection(conn, "192.168.1.100", -time.Minute)
 
-	require.NoError(t, client.ForwardPorts(context.Background(), []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
+	require.NoError(t, client.ForwardPorts(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
 
 	// A negative TTL must not wrap around to a huge lease.
 	assert.Len(t, conn.Forwarded, 1)
@@ -155,7 +155,7 @@ func TestClient_ForwardPorts_RespectsCancelledContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = client.ForwardPorts(ctx, []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}})
+	err = client.ForwardPorts(ctx, []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}})
 	// goupnp formats errors with %v, so the cause is only visible in the message.
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), context.Canceled.Error())

@@ -11,7 +11,7 @@ import (
 	dockerevents "github.com/moby/moby/api/types/events"
 	"github.com/moby/moby/client"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 const (
@@ -32,14 +32,14 @@ type DockerEventPortProvider struct {
 	retryDelay time.Duration
 
 	mu      sync.Mutex
-	tracked map[string][]types.PortMapping
+	tracked map[string][]portmap.Mapping
 }
 
 func NewDockerEventPortProvider(cli EventInspector) *DockerEventPortProvider {
 	return &DockerEventPortProvider{
 		dockerCli:  cli,
 		retryDelay: defaultRetryDelay,
-		tracked:    map[string][]types.PortMapping{},
+		tracked:    map[string][]portmap.Mapping{},
 	}
 }
 
@@ -126,7 +126,7 @@ func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChan
 	}
 
 	d.mu.Lock()
-	var stopped []types.PortMapping
+	var stopped []portmap.Mapping
 	for id, mappings := range d.tracked {
 		if !running[id] {
 			stopped = append(stopped, mappings...)
@@ -141,7 +141,7 @@ func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChan
 	return nil
 }
 
-func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, containerID string, addCh chan<- types.PortMapping) {
+func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, containerID string, addCh chan<- portmap.Mapping) {
 	result, err := d.dockerCli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		log.Printf("Failed to inspect container %s: %v", shortID(containerID), err)
@@ -168,7 +168,7 @@ func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, cont
 	send(ctx, addCh, mappings)
 }
 
-func (d *DockerEventPortProvider) handleContainerStop(ctx context.Context, containerID string, deleteCh chan<- types.PortMapping) {
+func (d *DockerEventPortProvider) handleContainerStop(ctx context.Context, containerID string, deleteCh chan<- portmap.Mapping) {
 	// Both "stop" and "die" fire for one container; only the first finds it tracked.
 	d.mu.Lock()
 	mappings, ok := d.tracked[containerID]
@@ -180,7 +180,7 @@ func (d *DockerEventPortProvider) handleContainerStop(ctx context.Context, conta
 	}
 }
 
-func send(ctx context.Context, ch chan<- types.PortMapping, mappings []types.PortMapping) {
+func send(ctx context.Context, ch chan<- portmap.Mapping, mappings []portmap.Mapping) {
 	if ch == nil {
 		return
 	}
