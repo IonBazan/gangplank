@@ -22,7 +22,8 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: stable
+          # golangci-lint must be built with a Go version at least as new as the one it analyzes.
+          go-version-file: go.mod
 
       - uses: golangci/golangci-lint-action@v9
         with:
