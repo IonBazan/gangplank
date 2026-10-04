@@ -79,63 +79,63 @@ func TestParsePortMapping(t *testing.T) {
 			input:       "8080:80/xyz",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Protocol must be 'TCP' or 'UDP'",
+			errContains: "protocol must be 'TCP' or 'UDP'",
 		},
 		{
 			name:        "Non-numeric external port",
 			input:       "abc:80/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "External port must be a number between 1 and 65535",
+			errContains: "external port must be a number between 1 and 65535",
 		},
 		{
 			name:        "Non-numeric internal port",
 			input:       "8080:xyz/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Internal port must be a number between 1 and 65535",
+			errContains: "internal port must be a number between 1 and 65535",
 		},
 		{
 			name:        "External port too low",
 			input:       "0:80/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "External port must be a number between 1 and 65535",
+			errContains: "external port must be a number between 1 and 65535",
 		},
 		{
 			name:        "External port too high",
 			input:       "65536:80/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "External port must be a number between 1 and 65535",
+			errContains: "external port must be a number between 1 and 65535",
 		},
 		{
 			name:        "Internal port too low",
 			input:       "8080:0/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Internal port must be a number between 1 and 65535",
+			errContains: "internal port must be a number between 1 and 65535",
 		},
 		{
 			name:        "Internal port too high",
 			input:       "8080:65536/tcp",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Internal port must be a number between 1 and 65535",
+			errContains: "internal port must be a number between 1 and 65535",
 		},
 		{
 			name:        "Empty string",
 			input:       "",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Invalid port format: port cannot be empty",
+			errContains: "invalid port format: port cannot be empty",
 		},
 		{
 			name:        "Colon only",
 			input:       ":",
 			wantMapping: PortMapping{},
 			wantErr:     true,
-			errContains: "Invalid port format: both external and internal ports cannot be empty",
+			errContains: "invalid port format: both external and internal ports cannot be empty",
 		},
 	}
 
@@ -152,4 +152,10 @@ func TestParsePortMapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPortMapping_Normalize(t *testing.T) {
+	assert.Equal(t, "TCP", PortMapping{}.Normalize().Protocol)
+	assert.Equal(t, "UDP", PortMapping{Protocol: " udp "}.Normalize().Protocol)
+	assert.Equal(t, "8080/TCP", PortMapping{ExternalPort: 8080, Protocol: "tcp"}.Normalize().Key())
 }
