@@ -18,6 +18,7 @@ Whether you’re running media servers, game servers, or development setups behi
 ## Getting started
 
 Gangplank is distributed as a Docker image, ideal for homelabbers and self-hosters using Docker.
+Standalone binaries for Linux, macOS, Windows and FreeBSD are also available on the [releases page](https://github.com/IonBazan/gangplank/releases).
 
 ### Prerequisites
 
@@ -55,7 +56,7 @@ services:
 ## Usage
 
 Exposing a service is as easy as adding a label to your Docker container:
-Using `gangplank.forward="published"` will expose all ports from the container to the world on the same port numbers:
+Using `gangplank.forward="published"` will expose all published ports of the container to the world on the same port numbers:
 
 ```yaml
 services:
@@ -77,19 +78,32 @@ For advanced usage, including command-line options and environment variables, ch
 ## Features
 - Fetch port mappings from Docker containers or YAML files.
 - Forward ports via UPnP to your router.
-- Poll Docker events to dynamically add/remove mappings (`daemon --poll`).
+- Poll Docker events to dynamically add/remove mappings (`daemon --poll`, `--cleanup-on-stop`), reconnecting automatically if Docker restarts.
 - Periodically refresh mappings to prevent expiration (`daemon` with `--refresh-interval`).
-- Manually add or delete individual port mappings.
+- Optionally remove stale mappings (`--prune`) and clean up on shutdown (`--cleanup-on-exit`).
+- List, add or delete individual port mappings.
 
 
 ## Notes
 
 - Gangplank uses a 1-hour lease duration for UPnP mappings by default. In `daemon` mode, `--refresh-interval` (default 15m) renews them before expiration.
 - Use `--network host` for UPnP to reach your router; Docker’s bridge network won’t work for homelab NAT traversal.
+- Mounting the Docker socket grants root-equivalent access to the host. See the [security notes](doc/advanced.md#security) for using a socket proxy instead.
 
 ## Contributing
 
 Open issues or PRs on [GitHub](https://github.com/ionbazan/gangplank)!
+
+Run the checks locally before submitting:
+
+```bash
+go test -race ./...
+golangci-lint run ./...
+```
+
+### Releasing
+
+Push a `vX.Y.Z` tag. CI then publishes multi-arch Docker images to Docker Hub and GHCR, and [GoReleaser](https://goreleaser.com) creates a GitHub release with binaries, checksums and a changelog.
 
 ## License
 
