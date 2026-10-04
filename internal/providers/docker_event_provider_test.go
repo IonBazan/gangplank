@@ -15,8 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
+
+// waitTimeout is only reached when a test fails, so it can be generous for slow CI runners.
+const waitTimeout = 5 * time.Second
 
 type eventStream struct {
 	msgs chan events.Message
@@ -28,6 +31,7 @@ type MockEventClient struct {
 	streams   []eventStream
 	current   eventStream
 	subscribe chan struct{}
+	listed    chan struct{}
 	Running   []container.Summary
 	Inspect   map[string]container.InspectResponse
 	// ListErrs are returned by successive ContainerList calls before it succeeds.
@@ -35,7 +39,11 @@ type MockEventClient struct {
 }
 
 func newMockEventClient(streams int) *MockEventClient {
-	m := &MockEventClient{subscribe: make(chan struct{}, streams+1), Inspect: map[string]container.InspectResponse{}}
+	m := &MockEventClient{
+		subscribe: make(chan struct{}, streams+1),
+		listed:    make(chan struct{}, 10),
+		Inspect:   map[string]container.InspectResponse{},
+	}
 	for range streams {
 		m.streams = append(m.streams, eventStream{make(chan events.Message, 10), make(chan error, 1)})
 	}
@@ -59,6 +67,12 @@ func (m *MockEventClient) Events(ctx context.Context, options client.EventsListO
 func (m *MockEventClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer func() {
+		select {
+		case m.listed <- struct{}{}:
+		default:
+		}
+	}()
 	if len(m.ListErrs) > 0 {
 		err := m.ListErrs[0]
 		m.ListErrs = m.ListErrs[1:]
@@ -85,9 +99,9 @@ func inspectResponse(id, name string, labels map[string]string, ports network.Po
 	}
 }
 
-func collect(ch <-chan types.PortMapping, n int) []types.PortMapping {
-	var got []types.PortMapping
-	timeout := time.After(time.Second)
+func collect(ch <-chan portmap.Mapping, n int) []portmap.Mapping {
+	var got []portmap.Mapping
+	timeout := time.After(waitTimeout)
 	for len(got) < n {
 		select {
 		case m := <-ch:
@@ -99,7 +113,7 @@ func collect(ch <-chan types.PortMapping, n int) []types.PortMapping {
 	return got
 }
 
-func assertNoMore(t *testing.T, ch <-chan types.PortMapping) {
+func assertNoMore(t *testing.T, ch <-chan portmap.Mapping) {
 	t.Helper()
 	select {
 	case m := <-ch:
@@ -108,11 +122,21 @@ func assertNoMore(t *testing.T, ch <-chan types.PortMapping) {
 	}
 }
 
+// waitListed waits until the provider has listed the running containers, which it does after subscribing.
+func waitListed(t *testing.T, m *MockEventClient) {
+	t.Helper()
+	select {
+	case <-m.listed:
+	case <-time.After(waitTimeout):
+		t.Fatal("provider did not list containers")
+	}
+}
+
 func waitSubscribed(t *testing.T, m *MockEventClient) {
 	t.Helper()
 	select {
 	case <-m.subscribe:
-	case <-time.After(time.Second):
+	case <-time.After(waitTimeout):
 		t.Fatal("provider did not subscribe to events")
 	}
 }
@@ -122,30 +146,30 @@ func TestDockerEventPortProvider_Listen(t *testing.T) {
 		name       string
 		inspect    container.InspectResponse
 		events     []events.Action
-		wantAdd    []types.PortMapping
-		wantDelete []types.PortMapping
+		wantAdd    []portmap.Mapping
+		wantDelete []portmap.Mapping
 	}{
 		{
 			name: "Nginx start with published ports",
 			inspect: inspectResponse("nginx1234567890", "nginx", map[string]string{labelForward: "published"},
 				network.PortMap{network.MustParsePort("80/tcp"): {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}, {HostIP: netip.MustParseAddr("::"), HostPort: "8080"}}}),
 			events:  []events.Action{events.ActionStart},
-			wantAdd: []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"}},
+			wantAdd: []portmap.Mapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"}},
 		},
 		{
 			name: "Redis start, stop and die deletes once",
 			inspect: inspectResponse("redis4567890123", "redis", map[string]string{labelForward: "6379:6379/tcp"},
 				network.PortMap{network.MustParsePort("6379/tcp"): {{HostPort: "6379"}}}),
 			events:     []events.Action{events.ActionStart, events.ActionDie, events.ActionStop},
-			wantAdd:    []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
-			wantDelete: []types.PortMapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
+			wantAdd:    []portmap.Mapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
+			wantDelete: []portmap.Mapping{{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"}},
 		},
 		{
 			name: "Postgres start with container-referenced label",
 			inspect: inspectResponse("pg7890123456789", "postgres", map[string]string{labelForwardContainer: "5432/tcp"},
 				network.PortMap{network.MustParsePort("5432/tcp"): {{HostPort: "5433"}}}),
 			events:  []events.Action{events.ActionStart},
-			wantAdd: []types.PortMapping{{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"}},
+			wantAdd: []portmap.Mapping{{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"}},
 		},
 	}
 
@@ -155,8 +179,8 @@ func TestDockerEventPortProvider_Listen(t *testing.T) {
 			mockClient.Inspect[tt.inspect.ID] = tt.inspect
 			provider := NewDockerEventPortProvider(mockClient)
 
-			addCh := make(chan types.PortMapping, 10)
-			deleteCh := make(chan types.PortMapping, 10)
+			addCh := make(chan portmap.Mapping, 10)
+			deleteCh := make(chan portmap.Mapping, 10)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -192,8 +216,8 @@ func TestDockerEventPortProvider_TracksContainersRunningAtStartup(t *testing.T) 
 	}}
 	provider := NewDockerEventPortProvider(mockClient)
 
-	addCh := make(chan types.PortMapping, 10)
-	deleteCh := make(chan types.PortMapping, 10)
+	addCh := make(chan portmap.Mapping, 10)
+	deleteCh := make(chan portmap.Mapping, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -204,7 +228,7 @@ func TestDockerEventPortProvider_TracksContainersRunningAtStartup(t *testing.T) 
 	assertNoMore(t, addCh)
 
 	mockClient.streamsSend(events.Message{Action: events.ActionStop, Actor: events.Actor{ID: "web123456789012"}})
-	assert.Equal(t, []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}}, collect(deleteCh, 1))
+	assert.Equal(t, []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}}, collect(deleteCh, 1))
 }
 
 func TestDockerEventPortProvider_ReconnectsAndResyncs(t *testing.T) {
@@ -217,13 +241,14 @@ func TestDockerEventPortProvider_ReconnectsAndResyncs(t *testing.T) {
 	provider := NewDockerEventPortProvider(mockClient)
 	provider.retryDelay = time.Millisecond
 
-	addCh := make(chan types.PortMapping, 10)
-	deleteCh := make(chan types.PortMapping, 10)
+	addCh := make(chan portmap.Mapping, 10)
+	deleteCh := make(chan portmap.Mapping, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
 	waitSubscribed(t, mockClient)
+	waitListed(t, mockClient)
 
 	// While disconnected, "old" stops and "new" starts.
 	mockClient.mu.Lock()
@@ -236,8 +261,8 @@ func TestDockerEventPortProvider_ReconnectsAndResyncs(t *testing.T) {
 	mockClient.mu.Unlock()
 
 	waitSubscribed(t, mockClient)
-	require.Equal(t, []types.PortMapping{{ExternalPort: 2000, InternalPort: 2000, Protocol: "TCP", Name: "new"}}, collect(addCh, 1))
-	require.Equal(t, []types.PortMapping{{ExternalPort: 1000, InternalPort: 1000, Protocol: "TCP", Name: "old"}}, collect(deleteCh, 1))
+	require.Equal(t, []portmap.Mapping{{ExternalPort: 2000, InternalPort: 2000, Protocol: "TCP", Name: "new"}}, collect(addCh, 1))
+	require.Equal(t, []portmap.Mapping{{ExternalPort: 1000, InternalPort: 1000, Protocol: "TCP", Name: "old"}}, collect(deleteCh, 1))
 }
 
 func TestDockerEventPortProvider_NilDeleteChannel(t *testing.T) {
@@ -245,7 +270,7 @@ func TestDockerEventPortProvider_NilDeleteChannel(t *testing.T) {
 	mockClient.Inspect["svc12345678901"] = inspectResponse("svc12345678901", "svc", map[string]string{labelForward: "81"}, nil)
 	provider := NewDockerEventPortProvider(mockClient)
 
-	addCh := make(chan types.PortMapping, 10)
+	addCh := make(chan portmap.Mapping, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -265,7 +290,7 @@ func TestDockerEventPortProvider_NilDeleteChannel(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(waitTimeout):
 		t.Fatal("Listen did not return after cancel")
 	}
 }
@@ -277,7 +302,7 @@ func TestDockerEventPortProvider_RetriesWhenDockerIsUnavailable(t *testing.T) {
 	provider := NewDockerEventPortProvider(mockClient)
 	provider.retryDelay = time.Millisecond
 
-	addCh := make(chan types.PortMapping, 10)
+	addCh := make(chan portmap.Mapping, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go provider.Listen(ctx, PortEventChannels{Add: addCh})
@@ -288,7 +313,7 @@ func TestDockerEventPortProvider_RetriesWhenDockerIsUnavailable(t *testing.T) {
 	waitSubscribed(t, mockClient)
 
 	mockClient.streamsSend(events.Message{Action: events.ActionStart, Actor: events.Actor{ID: "app12345678901"}})
-	assert.Equal(t, []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "app"}}, collect(addCh, 1))
+	assert.Equal(t, []portmap.Mapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "app"}}, collect(addCh, 1))
 }
 
 func TestDockerEventPortProvider_ReconnectsWhenStreamCloses(t *testing.T) {
@@ -311,8 +336,8 @@ func TestDockerEventPortProvider_IgnoresUninspectableContainers(t *testing.T) {
 	mockClient := newMockEventClient(1)
 	provider := NewDockerEventPortProvider(mockClient)
 
-	addCh := make(chan types.PortMapping, 10)
-	deleteCh := make(chan types.PortMapping, 10)
+	addCh := make(chan portmap.Mapping, 10)
+	deleteCh := make(chan portmap.Mapping, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
@@ -335,13 +360,13 @@ func TestSend_StopsWhenContextIsCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		// Unbuffered channel without a reader would block forever.
-		send(ctx, make(chan types.PortMapping), []types.PortMapping{{ExternalPort: 80}})
+		send(ctx, make(chan portmap.Mapping), []portmap.Mapping{{ExternalPort: 80}})
 		close(done)
 	}()
 
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(waitTimeout):
 		t.Fatal("send blocked after cancel")
 	}
 }

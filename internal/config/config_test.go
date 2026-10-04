@@ -9,10 +9,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
-func TestLoadConfig(t *testing.T) {
+func TestLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "gangplank.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 ttl: 30m
@@ -26,26 +26,26 @@ ports:
     name: web
 `), 0o600))
 
-	cfg, err := LoadConfig(path)
+	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, &Config{
-		Ttl:             30 * time.Minute,
+		TTL:             30 * time.Minute,
 		Gateway:         "http://192.168.1.1:5000/rootDesc.xml",
 		LocalIP:         "192.168.1.10",
 		RefreshInterval: 5 * time.Minute,
-		Ports:           []types.PortMapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
+		Ports:           []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}},
 	}, cfg)
 }
 
 func TestLoadConfig_Example(t *testing.T) {
-	cfg, err := LoadConfig("../../config.example.yaml")
+	cfg, err := Load("../../config.example.yaml")
 	require.NoError(t, err)
-	assert.Equal(t, 60*time.Minute, cfg.Ttl)
+	assert.Equal(t, 60*time.Minute, cfg.TTL)
 	assert.NotEmpty(t, cfg.Ports)
 }
 
 func TestLoadConfig_Missing(t *testing.T) {
-	_, err := LoadConfig(filepath.Join(t.TempDir(), "missing.yaml"))
+	_, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
 	assert.Error(t, err)
 }
 
@@ -54,16 +54,50 @@ func TestLoadConfig_DefaultLocation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("ttl: 5m\n"), 0o600))
 	t.Chdir(dir)
 
-	cfg, err := LoadConfig("")
+	cfg, err := Load("")
 	require.NoError(t, err)
-	assert.Equal(t, 5*time.Minute, cfg.Ttl)
+	assert.Equal(t, 5*time.Minute, cfg.TTL)
 }
 
 func TestLoadConfig_DefaultLocationMissing(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	_, err := LoadConfig("")
-	assert.Error(t, err)
+	cfg, err := Load("")
+	assert.NoError(t, err)
+	assert.Nil(t, cfg)
+}
+
+func TestLoadConfig_DefaultYmlExtension(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yml"), []byte("gateway: http://router/desc.xml\n"), 0o600))
+	t.Chdir(dir)
+
+	cfg, err := Load("")
+	require.NoError(t, err)
+	assert.Equal(t, "http://router/desc.xml", cfg.Gateway)
+}
+
+func TestLoadConfig_EmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, &Config{}, cfg)
+}
+
+func TestConfig_FlagValues(t *testing.T) {
+	var empty *Config
+	assert.Empty(t, empty.FlagValues())
+	assert.Empty(t, (&Config{}).FlagValues())
+
+	cfg := &Config{TTL: 30 * time.Minute, Gateway: "http://router/desc.xml", LocalIP: "192.168.1.10", RefreshInterval: 5 * time.Minute}
+	assert.Equal(t, map[string]string{
+		"ttl":              "30m0s",
+		"gateway":          "http://router/desc.xml",
+		"local-ip":         "192.168.1.10",
+		"refresh-interval": "5m0s",
+	}, cfg.FlagValues())
 }
 
 func TestLoadConfig_Invalid(t *testing.T) {
@@ -71,6 +105,7 @@ func TestLoadConfig_Invalid(t *testing.T) {
 		"Malformed YAML": "ports: [\n",
 		"Wrong type":     "ports: not-a-list\n",
 		"Bad duration":   "ttl: forever\n",
+		"Unknown key":    "duration: 60m\n",
 	}
 
 	for name, content := range tests {
@@ -78,7 +113,7 @@ func TestLoadConfig_Invalid(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-			_, err := LoadConfig(path)
+			_, err := Load(path)
 			assert.Error(t, err)
 		})
 	}

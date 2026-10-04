@@ -7,7 +7,7 @@ import (
 
 	"github.com/huin/goupnp/soap"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 type DeletedMapping struct {
@@ -18,7 +18,7 @@ type DeletedMapping struct {
 // DummyConnection is used for --dry-run and tests. Read results with Snapshot.
 type DummyConnection struct {
 	mu        sync.Mutex
-	Forwarded []types.PortMapping
+	Forwarded []portmap.Mapping
 	Deleted   []DeletedMapping
 	// When set, listed instead of the default sample entry.
 	Existing   []PortMappingEntry
@@ -26,11 +26,11 @@ type DummyConnection struct {
 	DeleteErr  error
 }
 
-func (c *DummyConnection) Snapshot() ([]types.PortMapping, []DeletedMapping) {
+func (c *DummyConnection) Snapshot() ([]portmap.Mapping, []DeletedMapping) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return append([]types.PortMapping(nil), c.Forwarded...), append([]DeletedMapping(nil), c.Deleted...)
+	return append([]portmap.Mapping(nil), c.Forwarded...), append([]DeletedMapping(nil), c.Deleted...)
 }
 
 func (c *DummyConnection) GetExternalIPAddressCtx(ctx context.Context) (string, error) {
@@ -59,7 +59,7 @@ func (c *DummyConnection) AddPortMappingCtx(
 		return c.ForwardErr
 	}
 
-	c.Forwarded = append(c.Forwarded, types.PortMapping{
+	c.Forwarded = append(c.Forwarded, portmap.Mapping{
 		ExternalPort: int(NewExternalPort),
 		InternalPort: int(NewInternalPort),
 		Protocol:     NewProtocol,

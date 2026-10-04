@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
-	"github.com/spf13/pflag"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,7 +27,7 @@ type fakeDocker struct {
 	events     chan string
 }
 
-func newFakeDocker(t *testing.T, containers string) *fakeDocker {
+func newFakeDocker(t *testing.T, a *app, containers string) *fakeDocker {
 	t.Helper()
 	d := &fakeDocker{containers: containers, inspect: map[string]string{}, events: make(chan string, 10)}
 
@@ -67,60 +65,26 @@ func newFakeDocker(t *testing.T, containers string) *fakeDocker {
 	}))
 	t.Cleanup(srv.Close)
 
-	useDocker(t, "tcp://"+srv.Listener.Addr().String())
+	useDocker(a, "tcp://"+srv.Listener.Addr().String())
 	return d
 }
 
-func useDocker(t *testing.T, host string) {
-	t.Helper()
-	original := NewDockerClient
-	NewDockerClient = func() (*client.Client, error) {
+func useDocker(a *app, host string) {
+	a.newDocker = func() (*client.Client, error) {
 		return client.New(client.WithHost(host))
 	}
-	t.Cleanup(func() { NewDockerClient = original })
 }
 
-func resetFlags(t *testing.T) {
+func run(t *testing.T, ctx context.Context, a *app, args ...string) (string, error) {
 	t.Helper()
-	reset := func(flags *pflag.FlagSet) {
-		flags.VisitAll(func(f *pflag.Flag) {
-			_ = f.Value.Set(f.DefValue)
-			f.Changed = false
-		})
-	}
-	cleanup := func() {
-		viper.Reset()
-		cfg = nil
-		reset(rootCmd.PersistentFlags())
-		for _, c := range rootCmd.Commands() {
-			reset(c.Flags())
-		}
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-}
-
-func run(t *testing.T, ctx context.Context, args ...string) (string, error) {
-	t.Helper()
-	resetFlags(t)
 
 	var out bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&out)
-	rootCmd.SetArgs(args)
-	t.Cleanup(func() {
-		rootCmd.SetOut(nil)
-		rootCmd.SetErr(nil)
-		rootCmd.SetArgs(nil)
-	})
+	root := a.rootCmd()
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs(args)
 
-	// Cobra only sets a subcommand's context when it has none, so later runs
-	// would otherwise inherit the (cancelled) context of an earlier one.
-	for _, c := range rootCmd.Commands() {
-		c.SetContext(ctx)
-	}
-
-	_, err := rootCmd.ExecuteContextC(ctx)
+	err := root.ExecuteContext(ctx)
 	return out.String(), err
 }
 
@@ -131,14 +95,20 @@ func gatewayArgs(igd *upnptest.IGD) []string {
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	writeConfigAt(t, path, content)
 	return path
 }
 
+func writeConfigAt(t *testing.T, path, content string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+}
+
 func TestAddCommand(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
 
-	_, err := run(t, context.Background(), append([]string{"add", "8080:80/udp", "--name", "web"}, gatewayArgs(igd)...)...)
+	_, err := run(t, context.Background(), a, append([]string{"add", "8080:80/udp", "--name", "web"}, gatewayArgs(igd)...)...)
 	require.NoError(t, err)
 	assert.Equal(t, []upnptest.Mapping{
 		{ExternalPort: 8080, InternalPort: 80, Protocol: "UDP", InternalIP: "192.168.1.10", Description: "Gangplank UPnP: web", Lease: 3600},
@@ -146,45 +116,48 @@ func TestAddCommand(t *testing.T) {
 }
 
 func TestAddCommand_Errors(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
 	igd.PermanentOnly = true
 
-	_, err := run(t, context.Background(), append([]string{"add", "99999"}, gatewayArgs(igd)...)...)
+	_, err := run(t, context.Background(), a, append([]string{"add", "99999"}, gatewayArgs(igd)...)...)
 	assert.ErrorContains(t, err, "failed to parse port mapping")
 
-	_, err = run(t, context.Background(), "add", "80", "--gateway", "http://127.0.0.1:1/rootDesc.xml")
+	_, err = run(t, context.Background(), a, "add", "80", "--gateway", "http://127.0.0.1:1/rootDesc.xml")
 	assert.ErrorContains(t, err, "failed to initialize UPnP client")
 
-	_, err = run(t, context.Background(), "add")
+	_, err = run(t, context.Background(), a, "add")
 	assert.Error(t, err, "argument is required")
 }
 
 func TestDeleteCommand(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
 	igd.Add(upnptest.Mapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", InternalIP: "192.168.1.10"})
 
-	_, err := run(t, context.Background(), append([]string{"delete", "25565/tcp"}, gatewayArgs(igd)...)...)
+	_, err := run(t, context.Background(), a, append([]string{"delete", "25565/tcp"}, gatewayArgs(igd)...)...)
 	require.NoError(t, err)
 	assert.Empty(t, igd.Mappings())
 
-	_, err = run(t, context.Background(), append([]string{"delete", "25565/tcp"}, gatewayArgs(igd)...)...)
+	_, err = run(t, context.Background(), a, append([]string{"delete", "25565/tcp"}, gatewayArgs(igd)...)...)
 	assert.ErrorContains(t, err, "failed to delete port mapping 25565/TCP")
 
-	_, err = run(t, context.Background(), append([]string{"delete", "x"}, gatewayArgs(igd)...)...)
+	_, err = run(t, context.Background(), a, append([]string{"delete", "x"}, gatewayArgs(igd)...)...)
 	assert.ErrorContains(t, err, "failed to parse port mapping")
 }
 
 func TestListCommand(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
 
-	out, err := run(t, context.Background(), append([]string{"list"}, gatewayArgs(igd)...)...)
+	out, err := run(t, context.Background(), a, append([]string{"list"}, gatewayArgs(igd)...)...)
 	require.NoError(t, err)
 	assert.Empty(t, out, "nothing is printed to stdout without mappings")
 
 	igd.Add(upnptest.Mapping{ExternalPort: 443, InternalPort: 8443, Protocol: "TCP", InternalIP: "192.168.1.10", Description: "Gangplank UPnP: web", Lease: 3600})
 	igd.Add(upnptest.Mapping{ExternalPort: 53, InternalPort: 53, Protocol: "UDP", InternalIP: "192.168.1.11", Description: "dns"})
 
-	out, err = run(t, context.Background(), append([]string{"list"}, gatewayArgs(igd)...)...)
+	out, err = run(t, context.Background(), a, append([]string{"list"}, gatewayArgs(igd)...)...)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	require.Len(t, lines, 4)
@@ -197,11 +170,12 @@ const webContainer = `[{"Id":"web1234567890","Names":["/web"],"Labels":{"gangpla
 	"Ports":[{"IP":"0.0.0.0","PrivatePort":80,"PublicPort":8080,"Type":"tcp"},{"IP":"::","PrivatePort":80,"PublicPort":8080,"Type":"tcp"}]}]`
 
 func TestForwardCommand(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
-	newFakeDocker(t, webContainer)
+	newFakeDocker(t, a, webContainer)
 	config := writeConfig(t, "ports:\n  - externalPort: 53\n    internalPort: 53\n    protocol: udp\n    name: dns\n")
 
-	_, err := run(t, context.Background(), append([]string{"forward", "--config", config}, gatewayArgs(igd)...)...)
+	_, err := run(t, context.Background(), a, append([]string{"forward", "--config", config}, gatewayArgs(igd)...)...)
 	require.NoError(t, err)
 	assert.Equal(t, []upnptest.Mapping{
 		{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", InternalIP: "192.168.1.10", Description: "Gangplank UPnP: web", Lease: 3600},
@@ -210,11 +184,12 @@ func TestForwardCommand(t *testing.T) {
 }
 
 func TestForwardCommand_DockerUnavailable(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
-	useDocker(t, "tcp://127.0.0.1:1")
+	useDocker(a, "tcp://127.0.0.1:1")
 	config := writeConfig(t, "ports:\n  - externalPort: 53\n    internalPort: 53\n")
 
-	_, err := run(t, context.Background(), append([]string{"forward", "--config", config}, gatewayArgs(igd)...)...)
+	_, err := run(t, context.Background(), a, append([]string{"forward", "--config", config}, gatewayArgs(igd)...)...)
 
 	// The command fails, but the static ports are still forwarded.
 	assert.ErrorContains(t, err, "failed to list containers")
@@ -222,26 +197,28 @@ func TestForwardCommand_DockerUnavailable(t *testing.T) {
 }
 
 func TestForwardCommand_GatewayUnavailable(t *testing.T) {
-	newFakeDocker(t, "[]")
+	a := newApp()
+	newFakeDocker(t, a, "[]")
 
-	_, err := run(t, context.Background(), "forward", "--gateway", "http://127.0.0.1:1/rootDesc.xml")
+	_, err := run(t, context.Background(), a, "forward", "--gateway", "http://127.0.0.1:1/rootDesc.xml")
 	assert.ErrorContains(t, err, "failed to initialize UPnP client")
 }
 
 func TestForwardCommand_InvalidConfigFile(t *testing.T) {
-	newFakeDocker(t, "[]")
+	a := newApp()
+	newFakeDocker(t, a, "[]")
 	config := writeConfig(t, "ports:\n  - externalPort: 53\n    internalPort: 0\n")
 
-	_, err := run(t, context.Background(), "forward", "--dry-run", "--config", config)
+	_, err := run(t, context.Background(), a, "forward", "--dry-run", "--config", config)
 	assert.ErrorContains(t, err, "invalid port mapping at index 0")
 }
 
-func runDaemon(t *testing.T, args ...string) func() error {
+func runDaemon(t *testing.T, a *app, args ...string) func() error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := run(t, ctx, append([]string{"daemon"}, args...)...)
+		_, err := run(t, ctx, a, append([]string{"daemon"}, args...)...)
 		errCh <- err
 	}()
 
@@ -258,13 +235,14 @@ func runDaemon(t *testing.T, args ...string) func() error {
 }
 
 func TestDaemonCommand(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
-	newFakeDocker(t, webContainer)
+	newFakeDocker(t, a, webContainer)
 	// A stale mapping from an earlier run, and one owned by something else.
 	igd.Add(upnptest.Mapping{ExternalPort: 9000, InternalPort: 9000, Protocol: "TCP", InternalIP: "192.168.1.10", Description: "Gangplank UPnP: removed"})
 	igd.Add(upnptest.Mapping{ExternalPort: 32400, InternalPort: 32400, Protocol: "TCP", InternalIP: "192.168.1.20", Description: "Plex"})
 
-	stop := runDaemon(t, append([]string{"--prune", "--cleanup-on-exit", "--refresh-interval", "20ms"}, gatewayArgs(igd)...)...)
+	stop := runDaemon(t, a, append([]string{"--prune", "--cleanup-on-exit", "--refresh-interval", "20ms"}, gatewayArgs(igd)...)...)
 
 	assert.Eventually(t, func() bool {
 		m := igd.Mappings()
@@ -278,12 +256,13 @@ func TestDaemonCommand(t *testing.T) {
 }
 
 func TestDaemonCommand_Poll(t *testing.T) {
+	a := newApp()
 	igd := upnptest.NewIGD(t)
-	docker := newFakeDocker(t, "[]")
+	docker := newFakeDocker(t, a, "[]")
 	docker.inspect["game1234567890"] = `{"Id":"game1234567890","Name":"/game","Config":{"Labels":{"gangplank.forward":"published"}},
 		"NetworkSettings":{"Ports":{"25565/tcp":[{"HostIp":"0.0.0.0","HostPort":"25565"}]}}}`
 
-	stop := runDaemon(t, append([]string{"--poll", "--cleanup-on-stop"}, gatewayArgs(igd)...)...)
+	stop := runDaemon(t, a, append([]string{"--poll", "--cleanup-on-stop"}, gatewayArgs(igd)...)...)
 
 	docker.events <- `{"Type":"container","Action":"start","Actor":{"ID":"game1234567890"}}`
 	assert.Eventually(t, func() bool { return len(igd.Mappings()) == 1 }, 5*time.Second, 10*time.Millisecond)
@@ -295,20 +274,19 @@ func TestDaemonCommand_Poll(t *testing.T) {
 }
 
 func TestDaemonCommand_RetriesGateway(t *testing.T) {
-	newFakeDocker(t, webContainer)
+	a := newApp()
+	newFakeDocker(t, a, webContainer)
 	conn := &upnp.DummyConnection{}
 
 	var attempts atomic.Int32
-	original := SetupUPnPClient
-	SetupUPnPClient = func(ctx context.Context) (*upnp.Client, error) {
+	a.connectGateway = func(ctx context.Context) (*upnp.Client, error) {
 		if attempts.Add(1) < 3 {
 			return nil, errors.New("router is booting")
 		}
 		return upnp.NewClientWithConnection(conn, "192.168.1.10", time.Hour), nil
 	}
-	t.Cleanup(func() { SetupUPnPClient = original })
 
-	stop := runDaemon(t, "--refresh-interval", "10ms")
+	stop := runDaemon(t, a, "--refresh-interval", "10ms")
 	assert.Eventually(t, func() bool {
 		forwarded, _ := conn.Snapshot()
 		return len(forwarded) > 0
@@ -318,21 +296,24 @@ func TestDaemonCommand_RetriesGateway(t *testing.T) {
 }
 
 func TestDaemonCommand_InvalidRefreshInterval(t *testing.T) {
-	_, err := run(t, context.Background(), "daemon", "--refresh-interval", "0s")
+	a := newApp()
+	_, err := run(t, context.Background(), a, "daemon", "--refresh-interval", "0s")
 	assert.ErrorContains(t, err, "--refresh-interval must be greater than 0")
 }
 
 func TestDaemonCommand_EnvironmentVariables(t *testing.T) {
-	newFakeDocker(t, "[]")
+	a := newApp()
+	newFakeDocker(t, a, "[]")
 	t.Setenv("GANGPLANK_REFRESH_INTERVAL", "-1s")
 
-	_, err := run(t, context.Background(), "daemon", "--dry-run")
+	_, err := run(t, context.Background(), a, "daemon", "--dry-run")
 	assert.ErrorContains(t, err, "--refresh-interval must be greater than 0", "environment variable should set the flag")
 }
 
 func TestCommandsRejectExtraArguments(t *testing.T) {
+	a := newApp()
 	for _, args := range [][]string{{"list", "x"}, {"forward", "x"}, {"daemon", "x"}, {"add", "1", "2"}, {"delete", "1", "2"}} {
-		_, err := run(t, context.Background(), args...)
+		_, err := run(t, context.Background(), a, args...)
 		assert.Error(t, err, "%v", args)
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 type MockDockerClient struct {
@@ -27,7 +27,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 	tests := []struct {
 		name       string
 		containers []container.Summary
-		wantPorts  []types.PortMapping
+		wantPorts  []portmap.Mapping
 		wantErr    bool
 	}{
 		{
@@ -44,7 +44,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 					},
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"},
 			},
 			wantErr: false,
@@ -63,7 +63,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 					},
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
 			},
 			wantErr: false,
@@ -82,7 +82,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 					},
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"},
 			},
 			wantErr: false,
@@ -94,7 +94,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 		{
 			name:       "No containers",
 			containers: []container.Summary{},
-			wantPorts:  []types.PortMapping{},
+			wantPorts:  []portmap.Mapping{},
 			wantErr:    false,
 		},
 	}
@@ -129,7 +129,7 @@ func TestDockerPortProvider_SortsByContainerName(t *testing.T) {
 
 	got, err := NewDockerPortProvider(mockClient).GetPortMappings(context.Background())
 	assert.NoError(t, err)
-	assert.Equal(t, []types.PortMapping{
+	assert.Equal(t, []portmap.Mapping{
 		{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "alpha"},
 		{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "zeta"},
 		{ExternalPort: 443, InternalPort: 443, Protocol: "TCP", Name: "zeta"},

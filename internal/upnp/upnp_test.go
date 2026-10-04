@@ -7,49 +7,49 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 func TestClient_ForwardPorts(t *testing.T) {
 	tests := []struct {
 		name          string
-		mappings      []types.PortMapping
+		mappings      []portmap.Mapping
 		localIP       string
 		forwardErr    error
-		wantForwarded []types.PortMapping
+		wantForwarded []portmap.Mapping
 		wantErr       bool
 	}{
 		{
 			name: "Single TCP mapping",
-			mappings: []types.PortMapping{
+			mappings: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
 			},
 			localIP: "192.168.1.100",
-			wantForwarded: []types.PortMapping{
+			wantForwarded: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: nginx"},
 			},
 		},
 		{
 			name: "Multiple mappings with unnamed port and lowercase protocol",
-			mappings: []types.PortMapping{
+			mappings: []portmap.Mapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
 				{ExternalPort: 5433, InternalPort: 5432, Protocol: "udp", Name: ""},
 			},
 			localIP: "192.168.1.101",
-			wantForwarded: []types.PortMapping{
+			wantForwarded: []portmap.Mapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "Gangplank UPnP: redis"},
 				{ExternalPort: 5433, InternalPort: 5432, Protocol: "UDP", Name: "Gangplank UPnP"},
 			},
 		},
 		{
 			name:          "Empty mappings",
-			mappings:      []types.PortMapping{},
+			mappings:      []portmap.Mapping{},
 			localIP:       "192.168.1.102",
 			wantForwarded: nil,
 		},
 		{
 			name: "Mapping with error",
-			mappings: []types.PortMapping{
+			mappings: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx"},
 				{ExternalPort: 8081, InternalPort: 81, Protocol: "TCP", Name: "other"},
 			},
@@ -97,7 +97,7 @@ func TestClient_ForwardPorts_PermanentLeaseFallback(t *testing.T) {
 	conn := &permanentOnlyConnection{}
 	client := NewClientWithConnection(conn, "192.168.1.100", DefaultLeaseDuration)
 
-	ports := []types.PortMapping{
+	ports := []portmap.Mapping{
 		{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"},
 		{ExternalPort: 443, InternalPort: 443, Protocol: "TCP"},
 	}

@@ -1,22 +1,32 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestInitConfig_Precedence(t *testing.T) {
-	viper.Reset()
-	t.Cleanup(viper.Reset)
+var errStop = errors.New("stop")
 
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`
+// settingsOf runs the daemon command until it needs Docker and returns the resolved settings.
+func settingsOf(t *testing.T, args ...string) (*app, error) {
+	t.Helper()
+	a := newApp()
+	a.newDocker = func() (*client.Client, error) { return nil, errStop }
+
+	_, err := run(t, context.Background(), a, append([]string{"daemon"}, args...)...)
+	if errors.Is(err, errStop) {
+		err = nil
+	}
+	return a, err
+}
+
+const fullConfig = `
 ttl: 30m
 gateway: http://192.168.1.1:5000/rootDesc.xml
 localIp: 192.168.1.10
@@ -26,23 +36,86 @@ ports:
     internalPort: 80
     protocol: tcp
     name: web
-`), 0o600))
+`
 
-	configFile = path
-	t.Cleanup(func() { configFile = "" })
-	// Environment wins over the config file.
+func TestSettings_Precedence(t *testing.T) {
+	config := writeConfig(t, fullConfig)
 	t.Setenv("GANGPLANK_LOCAL_IP", "192.168.1.20")
+	t.Setenv("GANGPLANK_TTL", "20m")
 
-	initConfig()
+	a, err := settingsOf(t, "--config", config, "--ttl", "45m")
+	require.NoError(t, err)
 
-	require.NotNil(t, cfg, "config file must be loaded into the package-level config")
-	require.Len(t, cfg.Ports, 1)
-	assert.Equal(t, 8080, cfg.Ports[0].ExternalPort)
+	require.NotNil(t, a.cfg)
+	require.Len(t, a.cfg.Ports, 1)
+	assert.Equal(t, 8080, a.cfg.Ports[0].ExternalPort)
 
-	assert.Equal(t, 30*time.Minute, ttl)
-	assert.Equal(t, "http://192.168.1.1:5000/rootDesc.xml", gateway)
-	assert.Equal(t, "192.168.1.20", localIP)
-	assert.Equal(t, 5*time.Minute, refreshInterval)
+	assert.Equal(t, 45*time.Minute, a.opts.ttl, "flag wins over env and file")
+	assert.Equal(t, "192.168.1.20", a.opts.localIP, "env wins over file")
+	assert.Equal(t, "http://192.168.1.1:5000/rootDesc.xml", a.opts.gateway, "file wins over default")
+	assert.Equal(t, 5*time.Minute, a.opts.refreshInterval)
+}
+
+func TestSettings_Defaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	a, err := settingsOf(t)
+	require.NoError(t, err)
+
+	assert.Nil(t, a.cfg)
+	assert.Equal(t, time.Hour, a.opts.ttl)
+	assert.Equal(t, 15*time.Minute, a.opts.refreshInterval)
+	assert.False(t, a.opts.poll)
+}
+
+func TestSettings_DefaultConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeConfigAt(t, dir+"/config.yaml", "ttl: 2h\n")
+
+	a, err := settingsOf(t)
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Hour, a.opts.ttl)
+}
+
+func TestSettings_ConfigFileFromEnvironment(t *testing.T) {
+	t.Setenv("GANGPLANK_CONFIG", writeConfig(t, fullConfig))
+	t.Setenv("GANGPLANK_POLL", "true")
+
+	a, err := settingsOf(t)
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Minute, a.opts.ttl)
+	assert.True(t, a.opts.poll)
+}
+
+func TestSettings_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		config  string
+		args    []string
+		wantErr string
+	}{
+		{name: "Invalid environment value", env: map[string]string{"GANGPLANK_TTL": "soon"}, wantErr: "invalid GANGPLANK_TTL"},
+		{name: "Missing config file", args: []string{"--config", "/does/not/exist.yaml"}, wantErr: "error loading config file"},
+		{name: "Unknown config key", config: "duration: 60m\n", wantErr: "field duration not found"},
+		{name: "Invalid config value", config: "ttl: soon\n", wantErr: "error loading config file"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			args := tt.args
+			if tt.config != "" {
+				args = append(args, "--config", writeConfig(t, tt.config))
+			}
+
+			_, err := settingsOf(t, args...)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestEnvVarName(t *testing.T) {

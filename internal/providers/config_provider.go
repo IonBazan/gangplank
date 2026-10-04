@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/IonBazan/gangplank/internal/config"
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 type ConfigPortProvider struct {
@@ -18,12 +18,12 @@ func NewConfigPortProvider(config *config.Config) *ConfigPortProvider {
 }
 
 // Invalid entries are skipped and reported in the returned error.
-func (f *ConfigPortProvider) GetPortMappings(_ context.Context) ([]types.PortMapping, error) {
+func (f *ConfigPortProvider) GetPortMappings(_ context.Context) ([]portmap.Mapping, error) {
 	if f.config == nil {
-		return []types.PortMapping{}, nil
+		return []portmap.Mapping{}, nil
 	}
 
-	mappings := []types.PortMapping{}
+	mappings := []portmap.Mapping{}
 	var errs []error
 	for i, p := range f.config.Ports {
 		p = p.Normalize()

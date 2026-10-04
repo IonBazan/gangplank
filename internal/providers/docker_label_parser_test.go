@@ -7,14 +7,14 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 func TestExtractPortsFromContainer(t *testing.T) {
 	tests := []struct {
 		name      string
 		ctr       container.Summary
-		wantPorts []types.PortMapping
+		wantPorts []portmap.Mapping
 	}{
 		{
 			name: "Nginx with published ports",
@@ -28,7 +28,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "published",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "nginx"},
 			},
 		},
@@ -44,7 +44,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "6379:6379/tcp",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 6379, InternalPort: 6379, Protocol: "TCP", Name: "redis"},
 			},
 		},
@@ -60,7 +60,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "5432/tcp",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 5432, InternalPort: 5433, Protocol: "TCP", Name: "postgres"},
 			},
 		},
@@ -77,7 +77,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "8080:80/tcp, 8443:443/tcp",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "nginx-multi"},
 				{ExternalPort: 8443, InternalPort: 443, Protocol: "TCP", Name: "nginx-multi"},
 			},
@@ -92,7 +92,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 				},
 				Labels: map[string]string{},
 			},
-			wantPorts: []types.PortMapping{},
+			wantPorts: []portmap.Mapping{},
 		},
 		{
 			name: "Invalid host-referenced label",
@@ -106,7 +106,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "invalid:port/tcp",
 				},
 			},
-			wantPorts: []types.PortMapping{},
+			wantPorts: []portmap.Mapping{},
 		},
 		{
 			name: "Container-referenced no matching port",
@@ -120,7 +120,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "9999/tcp",
 				},
 			},
-			wantPorts: []types.PortMapping{},
+			wantPorts: []portmap.Mapping{},
 		},
 		{
 			name: "Container-referenced label with explicit external port",
@@ -136,7 +136,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "8080:80/tcp, 5353:53/udp",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 32768, Protocol: "TCP", Name: "web"},
 				{ExternalPort: 5353, InternalPort: 32769, Protocol: "UDP", Name: "web"},
 			},
@@ -155,7 +155,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "published",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "dual"},
 			},
 		},
@@ -173,7 +173,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "abc/tcp, 80/udp, 81/tcp, , 80",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 80, InternalPort: 32768, Protocol: "TCP", Name: "edge"},
 			},
 		},
@@ -190,7 +190,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "published",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "pub"},
 			},
 		},
@@ -207,7 +207,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForwardContainer: "8080:80",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "both"},
 			},
 		},
@@ -223,7 +223,7 @@ func TestExtractPortsFromContainer(t *testing.T) {
 					labelForward: "published",
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "short123"},
 			},
 		},

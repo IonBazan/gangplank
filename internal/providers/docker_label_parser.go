@@ -8,7 +8,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 type ContainerInfo struct {
@@ -25,8 +25,8 @@ const labelForward = "gangplank.forward"
 // "published", or "[<external>:]<container port>[/<protocol>]".
 const labelForwardContainer = "gangplank.forward.container"
 
-func extractPortsFromContainer(ctr container.Summary) []types.PortMapping {
-	var mappings []types.PortMapping
+func extractPortsFromContainer(ctr container.Summary) []portmap.Mapping {
+	var mappings []portmap.Mapping
 	containerName := shortID(ctr.ID)
 	if len(ctr.Names) > 0 && ctr.Names[0] != "" {
 		containerName = strings.TrimPrefix(ctr.Names[0], "/")
@@ -48,8 +48,8 @@ func extractPortsFromContainer(ctr container.Summary) []types.PortMapping {
 	return dedupe(mappings)
 }
 
-func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []types.PortMapping {
-	var mappings []types.PortMapping
+func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []portmap.Mapping {
+	var mappings []portmap.Mapping
 
 	for _, part := range strings.Split(label, ",") {
 		part = strings.TrimSpace(part)
@@ -63,7 +63,7 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 					continue
 				}
 				// The router forwards to this host, so the internal port is the host port.
-				mappings = append(mappings, types.PortMapping{
+				mappings = append(mappings, portmap.Mapping{
 					ExternalPort: int(port.PublicPort),
 					InternalPort: int(port.PublicPort),
 					Protocol:     strings.ToUpper(port.Type),
@@ -82,7 +82,7 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 			mapping.Name = info.ContainerName
 			mappings = append(mappings, mapping)
 		} else {
-			mapping, err := types.ParsePortMapping(part)
+			mapping, err := portmap.Parse(part)
 			if err != nil {
 				log.Printf("Invalid port mapping %s for container %s: %v", part, shortID(info.ID), err)
 				continue
@@ -95,8 +95,8 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 }
 
 // When the external port is omitted, the container port number is used.
-func resolveContainerPort(spec string, ports []container.PortSummary) (types.PortMapping, error) {
-	mapping, err := types.ParsePortMapping(spec)
+func resolveContainerPort(spec string, ports []container.PortSummary) (portmap.Mapping, error) {
+	mapping, err := portmap.Parse(spec)
 	if err != nil {
 		return mapping, err
 	}
@@ -120,7 +120,7 @@ func isForwardable(port container.PortSummary) bool {
 }
 
 // Docker reports each binding twice, for 0.0.0.0 and ::.
-func dedupe(mappings []types.PortMapping) []types.PortMapping {
+func dedupe(mappings []portmap.Mapping) []portmap.Mapping {
 	seen := make(map[string]bool, len(mappings))
 	result := mappings[:0]
 	for _, m := range mappings {

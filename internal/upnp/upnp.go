@@ -16,7 +16,7 @@ import (
 	"github.com/huin/goupnp/dcps/internetgateway2"
 	"github.com/huin/goupnp/soap"
 
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 const DefaultLeaseDuration = 60 * time.Minute
@@ -138,7 +138,7 @@ func Description(name string) string {
 }
 
 // ForwardPorts keeps going after a failure and returns all errors joined.
-func (u *Client) ForwardPorts(ctx context.Context, mappings []types.PortMapping) error {
+func (u *Client) ForwardPorts(ctx context.Context, mappings []portmap.Mapping) error {
 	var errs []error
 	for _, m := range mappings {
 		if err := u.addPortMapping(ctx, m.Normalize()); err != nil {
@@ -152,7 +152,7 @@ func (u *Client) ForwardPorts(ctx context.Context, mappings []types.PortMapping)
 	return errors.Join(errs...)
 }
 
-func (u *Client) addPortMapping(ctx context.Context, m types.PortMapping) error {
+func (u *Client) addPortMapping(ctx context.Context, m portmap.Mapping) error {
 	lease := uint32(0)
 	if !u.permanentOnly.Load() {
 		lease = uint32(max(0, min(u.duration.Seconds(), math.MaxUint32)))
@@ -168,7 +168,7 @@ func (u *Client) addPortMapping(ctx context.Context, m types.PortMapping) error 
 	return err
 }
 
-func (u *Client) add(ctx context.Context, m types.PortMapping, lease uint32) error {
+func (u *Client) add(ctx context.Context, m portmap.Mapping, lease uint32) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 

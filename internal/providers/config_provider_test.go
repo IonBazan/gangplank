@@ -7,26 +7,26 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/IonBazan/gangplank/internal/config"
-	"github.com/IonBazan/gangplank/internal/types"
+	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
 func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 	tests := []struct {
 		name        string
 		config      *config.Config
-		wantPorts   []types.PortMapping
+		wantPorts   []portmap.Mapping
 		wantErr     bool
 		errContains string
 	}{
 		{
 			name: "Valid config with web and stream mappings",
 			config: &config.Config{
-				Ports: []types.PortMapping{
+				Ports: []portmap.Mapping{
 					{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "config-web"},
 					{ExternalPort: 9000, InternalPort: 90, Protocol: "UDP", Name: "config-stream"},
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "config-web"},
 				{ExternalPort: 9000, InternalPort: 90, Protocol: "UDP", Name: "config-stream"},
 			},
@@ -35,24 +35,24 @@ func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 		{
 			name: "Invalid external port",
 			config: &config.Config{
-				Ports: []types.PortMapping{
+				Ports: []portmap.Mapping{
 					{ExternalPort: 0, InternalPort: 80, Protocol: "TCP", Name: "invalid-port"},
 				},
 			},
-			wantPorts:   []types.PortMapping{},
+			wantPorts:   []portmap.Mapping{},
 			wantErr:     true,
 			errContains: "invalid port mapping at index 0",
 		},
 		{
 			name: "Invalid entry does not drop valid ones",
 			config: &config.Config{
-				Ports: []types.PortMapping{
+				Ports: []portmap.Mapping{
 					{ExternalPort: 8080, InternalPort: 80, Protocol: "tcp", Name: "lowercase"},
 					{ExternalPort: 9000, InternalPort: 0, Protocol: "UDP", Name: "broken"},
 					{ExternalPort: 53, InternalPort: 53, Name: "default-protocol"},
 				},
 			},
-			wantPorts: []types.PortMapping{
+			wantPorts: []portmap.Mapping{
 				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "lowercase"},
 				{ExternalPort: 53, InternalPort: 53, Protocol: "TCP", Name: "default-protocol"},
 			},
@@ -62,27 +62,27 @@ func TestConfigPortProvider_GetPortMappings(t *testing.T) {
 		{
 			name: "Invalid protocol",
 			config: &config.Config{
-				Ports: []types.PortMapping{
+				Ports: []portmap.Mapping{
 					{ExternalPort: 8080, InternalPort: 80, Protocol: "INVALID", Name: "invalid-protocol"},
 				},
 			},
-			wantPorts:   []types.PortMapping{},
+			wantPorts:   []portmap.Mapping{},
 			wantErr:     true,
 			errContains: "invalid port mapping at index 0",
 		},
 		{
 			name:        "Nil config",
 			config:      nil,
-			wantPorts:   []types.PortMapping{},
+			wantPorts:   []portmap.Mapping{},
 			wantErr:     false,
 			errContains: "",
 		},
 		{
 			name: "Empty config ports",
 			config: &config.Config{
-				Ports: []types.PortMapping{},
+				Ports: []portmap.Mapping{},
 			},
-			wantPorts:   []types.PortMapping{},
+			wantPorts:   []portmap.Mapping{},
 			wantErr:     false,
 			errContains: "",
 		},

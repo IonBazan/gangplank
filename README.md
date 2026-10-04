@@ -105,6 +105,8 @@ Push a tag like `v1.2.3`. CI then:
 - publishes Docker images for all supported platforms to Docker Hub and GHCR,
 - creates a GitHub release with binaries, checksums and a changelog (using [GoReleaser](https://goreleaser.com)).
 
+Forks work the same way. Images go to `ghcr.io/<owner>/<repo>`. To also push to Docker Hub, add a `DOCKERHUB_PASSWORD` secret. The image name defaults to `<owner>/<repo>`; set the `DOCKERHUB_USERNAME` or `DOCKERHUB_REPOSITORY` repository variables to change it.
+
 ## License
 
 MIT

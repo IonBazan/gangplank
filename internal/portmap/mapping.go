@@ -1,4 +1,4 @@
-package types
+package portmap
 
 import (
 	"errors"
@@ -7,18 +7,18 @@ import (
 	"strings"
 )
 
-type PortMapping struct {
-	ExternalPort int    `mapstructure:"externalPort" yaml:"externalPort"`
-	InternalPort int    `mapstructure:"internalPort" yaml:"internalPort"`
-	Protocol     string `mapstructure:"protocol" yaml:"protocol"`
-	Name         string `mapstructure:"name" yaml:"name"`
+type Mapping struct {
+	ExternalPort int    `yaml:"externalPort"`
+	InternalPort int    `yaml:"internalPort"`
+	Protocol     string `yaml:"protocol"`
+	Name         string `yaml:"name"`
 }
 
-func (p PortMapping) Key() string {
+func (p Mapping) Key() string {
 	return fmt.Sprintf("%d/%s", p.ExternalPort, p.Protocol)
 }
 
-func (p PortMapping) Normalize() PortMapping {
+func (p Mapping) Normalize() Mapping {
 	p.Protocol = strings.ToUpper(strings.TrimSpace(p.Protocol))
 	if p.Protocol == "" {
 		p.Protocol = "TCP"
@@ -27,7 +27,7 @@ func (p PortMapping) Normalize() PortMapping {
 	return p
 }
 
-func (p PortMapping) Validate() error {
+func (p Mapping) Validate() error {
 	if p.ExternalPort <= 0 || p.ExternalPort > 65535 {
 		return fmt.Errorf("external port must be a number between 1 and 65535, got %d", p.ExternalPort)
 	}
@@ -42,10 +42,10 @@ func (p PortMapping) Validate() error {
 	return nil
 }
 
-// ParsePortMapping parses "<external>:<internal>[/<protocol>]" or "<port>[/<protocol>]".
+// Parse parses "<external>:<internal>[/<protocol>]" or "<port>[/<protocol>]".
 // An omitted side of the colon copies the other one. The protocol defaults to TCP.
-func ParsePortMapping(mappingStr string) (PortMapping, error) {
-	var mapping PortMapping
+func Parse(mappingStr string) (Mapping, error) {
+	var mapping Mapping
 
 	parts := strings.Split(mappingStr, "/")
 	protocol := "TCP"
