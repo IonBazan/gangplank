@@ -6,10 +6,10 @@ These options work with every command:
 
 | Option | Description |
 |---|---|
-| `--config`, `-c` | Path to the YAML config file. By default, `config.yaml` in the working directory is used if it exists. |
+| `--config`, `-c` | Path to the YAML config file. By default, `gangplank.yaml` in the working directory is used if it exists. |
 | `--local-ip` | IP address that mappings point to. By default, Gangplank uses the address of the network interface that leads to your router. |
 | `--gateway` | URL of your router's UPnP description, for example `http://192.168.1.1:5000/rootDesc.xml`. By default, Gangplank finds the router on its own. |
-| `--ttl` | How long each mapping lasts before it expires. Default: `1h`. If your router only accepts permanent mappings, Gangplank notices and switches to them. |
+| `--ttl` | How long each mapping lasts before it expires. Default: `1h`. Use `0s` for permanent mappings. If your router only accepts permanent mappings, Gangplank notices and switches to them. |
 | `--dry-run` | Don't talk to the router. Only print what would be done. |
 | `--log-level` | How much to log: `debug`, `info` (default), `warn` or `error`. |
 | `--log-format` | `text` (default) or `json`, for log collectors. |
@@ -21,11 +21,14 @@ These options are for the `daemon` command:
 | `--poll`, `-p` | Watch Docker events and open ports as soon as containers start. The Docker image turns this on by default. |
 | `--cleanup-on-stop` | Close a container's ports when it stops. |
 | `--cleanup-on-exit` | Close all ports opened by Gangplank when it shuts down, for example on `docker stop`. |
-| `--prune` | On every refresh, close Gangplank ports for this host that are no longer needed, for example for containers removed while Gangplank was not running. |
+| `--prune` | On every refresh, close Gangplank ports for this host that are no longer needed, for example for containers removed while Gangplank was not running. Skipped while a source such as Docker can't be read, so its ports stay open. |
 | `--refresh-interval` | How often mappings are renewed. Default: `15m`. Keep it shorter than `--ttl`. |
 
 If the router can't be reached when the daemon starts (for example after a power cut, while the router is still booting), the daemon keeps trying every 30 seconds.
+If the router stops answering later, the daemon looks for it again in the same way.
 If Docker restarts, the daemon reconnects on its own.
+
+When two containers ask for the same port, the first one keeps it. With `--poll`, the port goes to the other container as soon as the first one stops.
 
 ## Environment variables
 
@@ -55,7 +58,7 @@ ports:
     name: web
 ```
 
-There is a full [example file](../config.example.yaml), and the [usage guide](usage.md#static-ports-from-a-yaml-file) explains the `ports` list.
+There is a full [example file](../gangplank.example.yaml), and the [usage guide](usage.md#static-ports-from-a-yaml-file) explains the `ports` list.
 
 When a setting is given in more than one place, this order wins: command-line option, then environment variable, then YAML file, then the default.
 

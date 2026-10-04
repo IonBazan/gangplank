@@ -35,7 +35,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - config.example.yaml
+      - gangplank.example.yaml
       - doc/*
 
 checksum:

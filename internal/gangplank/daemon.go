@@ -48,9 +48,18 @@ func (d *Daemon) Run(ctx context.Context) {
 	// Connect first, so container events are not dropped for lack of a gateway.
 	d.refresh(ctx)
 
+	// A released port may be wanted by another source, so refresh right away.
+	released := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	if d.opts.Poll {
-		wg.Go(func() { d.manager.PollAndForward(ctx, d.opts.CleanupOnStop) })
+		wg.Go(func() {
+			d.manager.PollAndForward(ctx, d.opts.CleanupOnStop, func() {
+				select {
+				case released <- struct{}{}:
+				default:
+				}
+			})
+		})
 	}
 	for {
 		wait := d.opts.RefreshInterval
@@ -67,6 +76,9 @@ func (d *Daemon) Run(ctx context.Context) {
 		case <-time.After(wait):
 			slog.Debug("Refreshing port mappings")
 			d.refresh(ctx)
+		case <-released:
+			slog.Debug("Refreshing port mappings after a container stopped")
+			d.refresh(ctx)
 		}
 	}
 }
@@ -76,13 +88,23 @@ func (d *Daemon) refresh(ctx context.Context) {
 		return
 	}
 
-	ports, err := d.manager.GetPortMappings(ctx)
-	if err != nil {
-		slog.Warn("Some port mappings could not be fetched", "error", err)
-	}
+	ports, err := d.manager.Refresh(ctx, d.opts.Prune)
 	d.logChanges(ports)
-	if err := d.manager.Sync(ctx, ports, d.opts.Prune); err != nil {
-		slog.Error("Some port mappings could not be applied", "error", err)
+	if err != nil {
+		slog.Error("Some port mappings could not be refreshed", "error", err)
+		d.checkGateway(ctx)
+	}
+}
+
+// A gateway that stops answering is dropped, so that the next refresh finds it
+// again, e.g. after the router restarted with a new address.
+func (d *Daemon) checkGateway(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	if _, err := d.manager.gateway().GetExternalIP(ctx); err != nil {
+		slog.Warn("UPnP gateway is not responding, reconnecting", "error", err)
+		d.manager.SetGateway(nil)
 	}
 }
 

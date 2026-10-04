@@ -92,7 +92,7 @@ List the ports with `gangplank.forward` instead, for example `gangplank.forward:
 ## Static ports from a YAML file
 
 For services outside Docker, list the ports in a YAML file.
-Gangplank reads `config.yaml` from its working directory (`/app/config.yaml` in the image), or the file given with `--config`.
+Gangplank reads `gangplank.yaml` from its working directory (`/app/gangplank.yaml` in the image), or the file given with `--config`.
 
 ```yaml
 ports:
@@ -112,7 +112,7 @@ Mount the file into the container:
 ```bash
 docker run -d --network host --restart unless-stopped \
     -v /var/run/docker.sock:/var/run/docker.sock:ro \
-    -v ./config.yaml:/app/config.yaml:ro \
+    -v ./gangplank.yaml:/app/gangplank.yaml:ro \
     ionbazan/gangplank:latest
 ```
 

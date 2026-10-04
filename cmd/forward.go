@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"os/signal"
@@ -28,24 +27,23 @@ func (a *app) forwardCmd() *cobra.Command {
 			}
 			defer func() { _ = dockerCli.Close() }()
 
+			gateway, err := a.connectGateway(ctx)
+			if err != nil {
+				return err
+			}
+			slog.Info("Connected to UPnP gateway", "local_ip", gateway.InternalIP())
+
 			manager := gangplank.NewManager(a.cfg, dockerCli)
-			ports, fetchErr := manager.GetPortMappings(ctx)
+			manager.SetGateway(gateway)
+			ports, err := manager.Refresh(ctx, false)
 			for _, p := range ports {
 				gangplank.LogMapping(p)
 			}
-
-			gateway, err := a.connectGateway(ctx)
 			if err != nil {
-				return errors.Join(fetchErr, err)
-			}
-			slog.Info("Connected to UPnP gateway", "local_ip", gateway.InternalIP())
-			manager.SetGateway(gateway)
-
-			if err := manager.Sync(ctx, ports, false); err != nil {
-				return errors.Join(fetchErr, fmt.Errorf("some port mappings could not be applied: %w", err))
+				return fmt.Errorf("some port mappings could not be forwarded: %w", err)
 			}
 
-			return fetchErr
+			return nil
 		},
 	}
 }

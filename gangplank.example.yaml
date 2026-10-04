@@ -2,7 +2,7 @@
 localIp: ~
 # Router UPnP description URL. Leave empty to find the router on the network.
 gateway: ~
-# How long each mapping lasts before it expires.
+# How long each mapping lasts before it expires. Use 0s for a permanent mapping.
 ttl: 60m
 # How often the daemon renews mappings. Keep it shorter than ttl.
 refreshInterval: 15m

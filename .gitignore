@@ -1,6 +1,6 @@
 /gangplank
-/config.yaml
-/config.yml
+/gangplank.yaml
+/gangplank.yml
 /*.cov
 /coverage.*
 /dist

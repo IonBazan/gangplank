@@ -100,6 +100,64 @@ func TestDaemon_RetriesGatewayUntilAvailable(t *testing.T) {
 	assert.Equal(t, int32(3), attempts.Load())
 }
 
+func TestDaemon_ReconnectsWhenGatewayStopsAnswering(t *testing.T) {
+	broken := &upnptest.Connection{ForwardErr: errors.New("connection refused"), ExternalIPErr: errors.New("connection refused")}
+	working := &upnptest.Connection{}
+	var attempts atomic.Int32
+	connect := func(context.Context) (Gateway, error) {
+		if attempts.Add(1) == 1 {
+			return newClient(broken), nil
+		}
+		return newClient(working), nil
+	}
+	d := NewDaemon(staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}), connect, DaemonOptions{RefreshInterval: time.Hour})
+	d.retryInterval = 5 * time.Millisecond
+
+	stop := startDaemon(t, d)
+	assert.Eventually(t, func() bool {
+		forwarded, _ := working.Snapshot()
+		return len(forwarded) == 1
+	}, waitTimeout, 5*time.Millisecond)
+	stop()
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+func TestDaemon_KeepsAnsweringGatewayAfterFailedForward(t *testing.T) {
+	conn := &upnptest.Connection{ForwardErr: errors.New("conflict in mapping entry")}
+	var attempts atomic.Int32
+	connect := func(context.Context) (Gateway, error) {
+		attempts.Add(1)
+		return newClient(conn), nil
+	}
+	d := NewDaemon(staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}), connect, DaemonOptions{RefreshInterval: 5 * time.Millisecond})
+
+	stop := startDaemon(t, d)
+	time.Sleep(50 * time.Millisecond)
+	stop()
+	assert.Equal(t, int32(1), attempts.Load())
+}
+
+func TestDaemon_RefreshesWhenPortIsReleased(t *testing.T) {
+	conn := &upnptest.Connection{}
+	events := &MockEventPortProvider{AddCh: make(chan portmap.Mapping), DeleteCh: make(chan portmap.Mapping, 1)}
+	m := staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"})
+	m.eventProviders = []providers.EventPortProvider{events}
+	d := NewDaemon(m, connectTo(conn), DaemonOptions{RefreshInterval: time.Hour, Poll: true})
+
+	stop := startDaemon(t, d)
+	require.Eventually(t, func() bool {
+		forwarded, _ := conn.Snapshot()
+		return len(forwarded) == 1
+	}, waitTimeout, 5*time.Millisecond)
+
+	events.DeleteCh <- portmap.Mapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "game"}
+	assert.Eventually(t, func() bool {
+		forwarded, _ := conn.Snapshot()
+		return len(forwarded) == 2
+	}, waitTimeout, 5*time.Millisecond, "a stopped container triggers a refresh")
+	stop()
+}
+
 func TestDaemon_PollsEvents(t *testing.T) {
 	conn := &upnptest.Connection{}
 	events := &MockEventPortProvider{AddCh: make(chan portmap.Mapping, 1), DeleteCh: make(chan portmap.Mapping, 1)}

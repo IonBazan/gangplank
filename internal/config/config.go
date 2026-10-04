@@ -14,10 +14,10 @@ import (
 )
 
 // DefaultFiles are looked up in the working directory when no file is given.
-var DefaultFiles = []string{"config.yaml", "config.yml"}
+var DefaultFiles = []string{"gangplank.yaml", "gangplank.yml"}
 
 type Config struct {
-	TTL             time.Duration     `yaml:"ttl"`
+	TTL             *time.Duration    `yaml:"ttl"`
 	Gateway         string            `yaml:"gateway"`
 	LocalIP         string            `yaml:"localIp"`
 	RefreshInterval time.Duration     `yaml:"refreshInterval"`
@@ -64,7 +64,7 @@ func (c *Config) FlagValues() map[string]string {
 	if c == nil {
 		return values
 	}
-	if c.TTL > 0 {
+	if c.TTL != nil {
 		values["ttl"] = c.TTL.String()
 	}
 	if c.Gateway != "" {

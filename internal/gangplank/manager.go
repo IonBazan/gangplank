@@ -18,6 +18,7 @@ type Gateway interface {
 	ForwardPorts(ctx context.Context, mappings []portmap.Mapping) error
 	DeletePortMapping(ctx context.Context, externalPort int, protocol string) error
 	ListPortMappings(ctx context.Context) ([]upnp.PortMappingEntry, error)
+	GetExternalIP(ctx context.Context) (string, error)
 	InternalIP() string
 }
 
@@ -30,6 +31,10 @@ type DockerClient interface {
 type Manager struct {
 	portProviders  []providers.PortProvider
 	eventProviders []providers.EventPortProvider
+
+	// syncMu serialises refreshes and container events, so that a refresh which
+	// fetched the ports before a container stopped cannot open its ports again.
+	syncMu sync.Mutex
 
 	mu        sync.Mutex
 	gw        Gateway
@@ -64,12 +69,37 @@ func (mgr *Manager) gateway() Gateway {
 	return mgr.gw
 }
 
+// Refresh fetches the wanted mappings from all sources and forwards them.
+// With prune, Gangplank mappings for this host that are no longer wanted are deleted.
+func (mgr *Manager) Refresh(ctx context.Context, prune bool) ([]portmap.Mapping, error) {
+	mgr.syncMu.Lock()
+	defer mgr.syncMu.Unlock()
+
+	gw := mgr.gateway()
+	if gw == nil {
+		slog.Debug("No UPnP gateway yet, skipping port forwarding")
+		return nil, nil
+	}
+
+	ports, fetchErr := mgr.fetch(ctx)
+	complete := fetchErr == nil
+	mgr.track(ports, complete)
+
+	err := gw.ForwardPorts(ctx, ports)
+	// A failing source returns only part of the ports, so pruning would close the rest.
+	if prune && complete {
+		err = errors.Join(err, mgr.prune(ctx, gw, ports))
+	}
+
+	return ports, errors.Join(fetchErr, err)
+}
+
 // A failing provider does not drop the others' mappings. When several sources
 // claim the same external port and protocol, the first one wins.
-func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, error) {
+func (mgr *Manager) fetch(ctx context.Context) ([]portmap.Mapping, error) {
 	slog.Debug("Fetching port mappings")
 	allPorts := []portmap.Mapping{}
-	owners := map[string]string{}
+	wanted := map[string]portmap.Mapping{}
 	var errs []error
 
 	for _, portProvider := range mgr.portProviders {
@@ -79,14 +109,14 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 		}
 		for _, p := range ports {
 			p = p.Normalize()
-			if owner, taken := owners[p.Key()]; taken {
-				if owner != p.Name {
-					slog.Warn("Port requested twice, keeping the first", "port", p.Key(), "kept", owner, "ignored", p.Name)
-				}
+			if owner, taken := heldByOther(wanted, p); taken {
+				slog.Warn("Port requested twice, keeping the first", "port", p.Key(), "kept", owner.Name, "ignored", p.Name)
 				continue
 			}
-			owners[p.Key()] = p.Name
-			allPorts = append(allPorts, p)
+			if _, seen := wanted[p.Key()]; !seen {
+				wanted[p.Key()] = p
+				allPorts = append(allPorts, p)
+			}
 		}
 	}
 
@@ -94,36 +124,29 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 	return allPorts, errors.Join(errs...)
 }
 
-// Sync forwards the desired mappings and makes them the current set.
-// With prune, Gangplank mappings for this host that are no longer desired are deleted.
-func (mgr *Manager) Sync(ctx context.Context, desired []portmap.Mapping, prune bool) error {
-	gw := mgr.gateway()
-	if gw == nil {
-		slog.Debug("No UPnP gateway yet, skipping port forwarding")
-		return nil
-	}
-
-	keep := make(map[string]portmap.Mapping, len(desired))
-	for _, p := range desired {
-		p = p.Normalize()
-		keep[p.Key()] = p
-	}
+// A partial set, from a failing source, is merged so that the ports this source
+// opened earlier are still known for ownership and cleanup.
+func (mgr *Manager) track(ports []portmap.Mapping, complete bool) {
 	mgr.mu.Lock()
-	mgr.forwarded = keep
-	mgr.mu.Unlock()
+	defer mgr.mu.Unlock()
 
-	err := gw.ForwardPorts(ctx, desired)
-	if prune {
-		err = errors.Join(err, mgr.prune(ctx, gw, keep))
+	if complete || mgr.forwarded == nil {
+		mgr.forwarded = make(map[string]portmap.Mapping, len(ports))
 	}
-
-	return err
+	for _, p := range ports {
+		mgr.forwarded[p.Key()] = p
+	}
 }
 
-func (mgr *Manager) prune(ctx context.Context, gw Gateway, keep map[string]portmap.Mapping) error {
+func (mgr *Manager) prune(ctx context.Context, gw Gateway, ports []portmap.Mapping) error {
 	entries, err := gw.ListPortMappings(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list gateway mappings: %w", err)
+	}
+
+	keep := make(map[string]bool, len(ports))
+	for _, p := range ports {
+		keep[p.Key()] = true
 	}
 
 	var errs []error
@@ -132,7 +155,7 @@ func (mgr *Manager) prune(ctx context.Context, gw Gateway, keep map[string]portm
 			continue
 		}
 		key := portmap.Mapping{ExternalPort: e.ExternalPort, Protocol: strings.ToUpper(e.Protocol)}.Key()
-		if _, ok := keep[key]; ok {
+		if keep[key] {
 			continue
 		}
 		if err := gw.DeletePortMapping(ctx, e.ExternalPort, e.Protocol); err != nil {
@@ -171,17 +194,17 @@ func (mgr *Manager) Cleanup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool) {
+// PollAndForward forwards the ports of containers as they start. When a
+// container stops, its ports are released, closed with cleanup, and released
+// is called so that another source waiting for them can get them.
+func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool, released func()) {
 	addCh := make(chan portmap.Mapping)
-	var deleteCh chan portmap.Mapping
-	if cleanup {
-		deleteCh = make(chan portmap.Mapping)
-	}
+	removeCh := make(chan portmap.Mapping)
 
 	var wg sync.WaitGroup
 	for _, provider := range mgr.eventProviders {
 		wg.Go(func() {
-			provider.Listen(ctx, providers.PortEventChannels{Add: addCh, Delete: deleteCh})
+			provider.Listen(ctx, providers.PortEventChannels{Add: addCh, Delete: removeCh})
 		})
 	}
 	defer wg.Wait()
@@ -192,10 +215,18 @@ func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool) {
 			return
 		case m := <-addCh:
 			mgr.add(ctx, m)
-		case m := <-deleteCh:
-			mgr.delete(ctx, m)
+		case m := <-removeCh:
+			if mgr.remove(ctx, m, cleanup) {
+				released()
+			}
 		}
 	}
+}
+
+// heldByOther returns the mapping in set that holds m's port for another source.
+func heldByOther(set map[string]portmap.Mapping, m portmap.Mapping) (portmap.Mapping, bool) {
+	owner, ok := set[m.Key()]
+	return owner, ok && owner.Name != m.Name
 }
 
 // claim records m as forwarded unless another source already owns its port.
@@ -203,7 +234,7 @@ func (mgr *Manager) claim(m portmap.Mapping) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
+	if owner, taken := heldByOther(mgr.forwarded, m); taken {
 		slog.Warn("Port already in use, ignoring", "port", m.Key(), "owner", owner.Name, "ignored", m.Name)
 		return false
 	}
@@ -219,7 +250,7 @@ func (mgr *Manager) release(m portmap.Mapping) bool {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 
-	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
+	if owner, taken := heldByOther(mgr.forwarded, m); taken {
 		slog.Info("Port still in use, keeping it", "port", m.Key(), "owner", owner.Name)
 		return false
 	}
@@ -228,6 +259,9 @@ func (mgr *Manager) release(m portmap.Mapping) bool {
 }
 
 func (mgr *Manager) add(ctx context.Context, m portmap.Mapping) {
+	mgr.syncMu.Lock()
+	defer mgr.syncMu.Unlock()
+
 	gw := mgr.gateway()
 	if gw == nil {
 		slog.Debug("No UPnP gateway yet, skipping port forwarding")
@@ -235,28 +269,34 @@ func (mgr *Manager) add(ctx context.Context, m portmap.Mapping) {
 	}
 
 	m = m.Normalize()
-	slog.Info("Forwarding port for started container", "port", m.Key(), "internal_port", m.InternalPort, "container", m.Name)
 	if !mgr.claim(m) {
 		return
 	}
+	slog.Info("Forwarding port for started container", "port", m.Key(), "internal_port", m.InternalPort, "container", m.Name)
 	if err := gw.ForwardPorts(ctx, []portmap.Mapping{m}); err != nil {
 		slog.Error("Failed to forward port", "port", m.Key(), "error", err)
 	}
 }
 
-func (mgr *Manager) delete(ctx context.Context, m portmap.Mapping) {
-	gw := mgr.gateway()
-	if gw == nil {
-		return
-	}
+// remove releases the port of a stopped container and, with cleanup, closes it.
+// It reports whether the port was released.
+func (mgr *Manager) remove(ctx context.Context, m portmap.Mapping, cleanup bool) bool {
+	mgr.syncMu.Lock()
+	defer mgr.syncMu.Unlock()
 
 	m = m.Normalize()
 	if !mgr.release(m) {
-		return
+		return false
+	}
+
+	gw := mgr.gateway()
+	if !cleanup || gw == nil {
+		return true
 	}
 	if err := gw.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
 		slog.Error("Failed to delete port mapping", "port", m.Key(), "container", m.Name, "error", err)
 	} else {
 		slog.Info("Deleted port mapping", "port", m.Key(), "name", m.Name)
 	}
+	return true
 }

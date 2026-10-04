@@ -49,7 +49,14 @@ func newClient(conn *upnptest.Connection) *upnp.Client {
 	return upnp.NewClientWithConnection(conn, "192.168.1.100", upnp.DefaultLeaseDuration)
 }
 
-func TestManager_GetPortMappings(t *testing.T) {
+// refreshWith makes ports the only wanted mappings and refreshes g.
+func refreshWith(g *Manager, prune bool, ports ...portmap.Mapping) error {
+	g.portProviders = []providers.PortProvider{&MockPortProvider{Ports: ports}}
+	_, err := g.Refresh(context.Background(), prune)
+	return err
+}
+
+func TestManager_Fetch(t *testing.T) {
 	web := portmap.Mapping{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}
 	db := portmap.Mapping{ExternalPort: 5432, InternalPort: 5432, Protocol: "TCP", Name: "db"}
 
@@ -94,7 +101,7 @@ func TestManager_GetPortMappings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := &Manager{portProviders: tt.portProviders}
-			ports, err := g.GetPortMappings(context.Background())
+			ports, err := g.fetch(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -105,60 +112,89 @@ func TestManager_GetPortMappings(t *testing.T) {
 	}
 }
 
-func TestManager_Sync(t *testing.T) {
-	ports := []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}}
+func TestManager_Refresh(t *testing.T) {
+	web := portmap.Mapping{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}
 
 	t.Run("No UPnP client", func(t *testing.T) {
-		g := &Manager{}
-		assert.NoError(t, g.Sync(context.Background(), ports, false))
+		ports, err := staticManager(web).Refresh(context.Background(), false)
+		assert.NoError(t, err)
+		assert.Empty(t, ports)
 	})
 
 	t.Run("Forward ports successfully", func(t *testing.T) {
 		conn := &upnptest.Connection{}
-		g := &Manager{}
+		g := staticManager(web)
 		g.SetGateway(newClient(conn))
 
-		assert.NoError(t, g.Sync(context.Background(), ports, false))
+		ports, err := g.Refresh(context.Background(), false)
+		assert.NoError(t, err)
+		assert.Equal(t, []portmap.Mapping{web}, ports)
 		forwarded, _ := conn.Snapshot()
 		assert.Equal(t, []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: web"}}, forwarded)
 	})
 
 	t.Run("Forward with error", func(t *testing.T) {
 		conn := &upnptest.Connection{ForwardErr: errors.New("forward error")}
-		g := &Manager{}
+		g := staticManager(web)
 		g.SetGateway(newClient(conn))
 
-		assert.ErrorIs(t, g.Sync(context.Background(), ports, false), conn.ForwardErr)
+		_, err := g.Refresh(context.Background(), false)
+		assert.ErrorIs(t, err, conn.ForwardErr)
 	})
 }
 
-func TestManager_SyncPrunesStaleMappings(t *testing.T) {
+func TestManager_RefreshPrunesStaleMappings(t *testing.T) {
 	conn := &upnptest.Connection{Existing: []upnptest.Mapping{
 		{ExternalPort: 80, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: web"},
 		{ExternalPort: 81, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: removed"},
 		{ExternalPort: 82, Protocol: "TCP", InternalIP: "192.168.1.200", Description: "Gangplank UPnP: other host"},
 		{ExternalPort: 83, Protocol: "UDP", InternalIP: "192.168.1.100", Description: "Plex"},
 	}}
-	g := &Manager{}
+	g := staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"})
 	g.SetGateway(newClient(conn))
 
-	desired := []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}}
-
-	require.NoError(t, g.Sync(context.Background(), desired, false))
+	_, err := g.Refresh(context.Background(), false)
+	require.NoError(t, err)
 	_, deleted := conn.Snapshot()
 	assert.Empty(t, deleted, "nothing is pruned unless asked")
 
-	require.NoError(t, g.Sync(context.Background(), desired, true))
+	_, err = g.Refresh(context.Background(), true)
+	require.NoError(t, err)
 	_, deleted = conn.Snapshot()
 	assert.Equal(t, []upnptest.Deleted{{ExtPort: 81, Protocol: "TCP"}}, deleted)
 }
 
+func TestManager_RefreshKeepsPortsOfFailingSource(t *testing.T) {
+	conn := &upnptest.Connection{Existing: []upnptest.Mapping{
+		{ExternalPort: 8080, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: web"},
+	}}
+	fromConfig := &MockPortProvider{Ports: []portmap.Mapping{{ExternalPort: 53, InternalPort: 53, Protocol: "UDP", Name: "dns"}}}
+	docker := &MockPortProvider{Ports: []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}}}
+	g := &Manager{portProviders: []providers.PortProvider{fromConfig, docker}}
+	g.SetGateway(newClient(conn))
+	ctx := context.Background()
+
+	_, err := g.Refresh(ctx, true)
+	require.NoError(t, err)
+
+	docker.Ports, docker.Err = nil, errors.New("docker unavailable")
+	_, err = g.Refresh(ctx, true)
+	assert.ErrorIs(t, err, docker.Err)
+	_, deleted := conn.Snapshot()
+	assert.Empty(t, deleted, "ports of a failing source are not pruned")
+
+	require.NoError(t, g.Cleanup(ctx))
+	_, deleted = conn.Snapshot()
+	assert.ElementsMatch(t, []upnptest.Deleted{{ExtPort: 53, Protocol: "UDP"}, {ExtPort: 8080, Protocol: "TCP"}}, deleted, "they are still cleaned up")
+}
+
 func TestManager_Cleanup(t *testing.T) {
 	conn := &upnptest.Connection{}
-	g := &Manager{}
+	g := staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "tcp", Name: "web"})
 	g.SetGateway(newClient(conn))
 
-	require.NoError(t, g.Sync(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "tcp", Name: "web"}}, false))
+	_, err := g.Refresh(context.Background(), false)
+	require.NoError(t, err)
 	require.NoError(t, g.Cleanup(context.Background()))
 
 	_, deleted := conn.Snapshot()
@@ -225,7 +261,7 @@ func TestManager_PollAndForward(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
 			go func() {
-				g.PollAndForward(ctx, tt.cleanup)
+				g.PollAndForward(ctx, tt.cleanup, func() {})
 				close(done)
 			}()
 
@@ -278,19 +314,19 @@ func TestManager_WithoutForwarder(t *testing.T) {
 	g := &Manager{}
 	ports := []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}
 
-	assert.NoError(t, g.Sync(context.Background(), ports, true))
+	assert.NoError(t, refreshWith(g, true, ports...))
 	assert.NoError(t, g.Cleanup(context.Background()))
-	g.delete(context.Background(), ports[0])
+	assert.True(t, g.remove(context.Background(), ports[0], true))
 }
 
-func TestManager_SyncReportsPruneErrors(t *testing.T) {
+func TestManager_RefreshReportsPruneErrors(t *testing.T) {
 	desired := []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}
 
 	t.Run("List fails", func(t *testing.T) {
 		g := &Manager{}
 		g.SetGateway(failingForwarder{Client: newClient(&upnptest.Connection{}), listErr: errors.New("list failed")})
 
-		err := g.Sync(context.Background(), desired, true)
+		err := refreshWith(g, true, desired...)
 		assert.ErrorContains(t, err, "failed to list gateway mappings")
 	})
 
@@ -304,19 +340,19 @@ func TestManager_SyncReportsPruneErrors(t *testing.T) {
 		g := &Manager{}
 		g.SetGateway(newClient(conn))
 
-		err := g.Sync(context.Background(), desired, true)
+		err := refreshWith(g, true, desired...)
 		assert.ErrorContains(t, err, "prune 81/TCP")
 	})
 }
 
-func TestManager_SyncReplacesForwardedSet(t *testing.T) {
+func TestManager_RefreshReplacesForwardedSet(t *testing.T) {
 	conn := &upnptest.Connection{}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
 	ctx := context.Background()
 
-	require.NoError(t, g.Sync(ctx, []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}, false))
-	require.NoError(t, g.Sync(ctx, []portmap.Mapping{{ExternalPort: 443, InternalPort: 443, Protocol: "TCP"}}, false))
+	require.NoError(t, refreshWith(g, false, portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}))
+	require.NoError(t, refreshWith(g, false, portmap.Mapping{ExternalPort: 443, InternalPort: 443, Protocol: "TCP"}))
 	require.NoError(t, g.Cleanup(ctx))
 
 	// Only the latest desired set is cleaned up.
@@ -328,7 +364,7 @@ func TestManager_CleanupReportsErrors(t *testing.T) {
 	conn := &upnptest.Connection{}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
-	require.NoError(t, g.Sync(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}, false))
+	require.NoError(t, refreshWith(g, false, portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}))
 
 	conn.DeleteErr = errors.New("delete failed")
 	assert.ErrorContains(t, g.Cleanup(context.Background()), "delete 80/TCP")
@@ -348,7 +384,7 @@ func TestManager_PollAndForwardSurvivesErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		g.PollAndForward(ctx, true)
+		g.PollAndForward(ctx, true, func() {})
 		close(done)
 	}()
 
@@ -368,18 +404,18 @@ func TestManager_EventsRespectPortOwnership(t *testing.T) {
 	ctx := context.Background()
 
 	fromConfig := portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "nginx"}
-	require.NoError(t, g.Sync(ctx, []portmap.Mapping{fromConfig}, false))
+	require.NoError(t, refreshWith(g, false, fromConfig))
 
 	// A container asking for the same port neither takes it over nor closes it.
 	g.add(ctx, portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "tcp", Name: "web"})
-	g.delete(ctx, portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "tcp", Name: "web"})
+	assert.False(t, g.remove(ctx, portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "tcp", Name: "web"}, true))
 
 	forwarded, deleted := conn.Snapshot()
 	assert.Len(t, forwarded, 1, "only the initial sync forwarded the port")
 	assert.Empty(t, deleted)
 
 	// The owner itself can still close it.
-	g.delete(ctx, fromConfig)
+	assert.True(t, g.remove(ctx, fromConfig, true))
 	_, deleted = conn.Snapshot()
 	assert.Equal(t, []upnptest.Deleted{{ExtPort: 80, Protocol: "TCP"}}, deleted)
 }
@@ -393,10 +429,97 @@ func TestManager_EventsForFreePorts(t *testing.T) {
 
 	g.add(ctx, game)
 	g.add(ctx, game) // a restarted container claims its own port again
-	g.delete(ctx, game)
-	g.delete(ctx, game) // stop and die both arrive
+	g.remove(ctx, game, true)
+	g.remove(ctx, game, true) // stop and die both arrive
 
 	forwarded, deleted := conn.Snapshot()
 	assert.Len(t, forwarded, 2)
 	assert.Len(t, deleted, 2, "deleting an unknown port is still passed to the gateway")
+}
+
+type blockingProvider struct {
+	ports   []portmap.Mapping
+	started chan struct{}
+	proceed chan struct{}
+}
+
+func (b *blockingProvider) GetPortMappings(context.Context) ([]portmap.Mapping, error) {
+	close(b.started)
+	<-b.proceed
+	return b.ports, nil
+}
+
+func TestManager_ContainerStopWaitsForRefresh(t *testing.T) {
+	conn := &upnptest.Connection{}
+	game := portmap.Mapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "game"}
+	provider := &blockingProvider{ports: []portmap.Mapping{game}, started: make(chan struct{}), proceed: make(chan struct{})}
+	g := &Manager{portProviders: []providers.PortProvider{provider}}
+	g.SetGateway(newClient(conn))
+	ctx := context.Background()
+
+	refreshed := make(chan struct{})
+	go func() {
+		_, _ = g.Refresh(ctx, false)
+		close(refreshed)
+	}()
+	<-provider.started
+
+	removed := make(chan struct{})
+	go func() {
+		g.remove(ctx, game, true)
+		close(removed)
+	}()
+	select {
+	case <-removed:
+		t.Fatal("container stop was handled in the middle of a refresh")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(provider.proceed)
+	<-refreshed
+	<-removed
+	forwarded, deleted := conn.Snapshot()
+	assert.Len(t, forwarded, 1)
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 25565, Protocol: "TCP"}}, deleted, "the port is closed after the refresh opened it")
+}
+
+func TestManager_StoppedContainerFreesPortWithoutCleanup(t *testing.T) {
+	conn := &upnptest.Connection{}
+	g := &Manager{}
+	g.SetGateway(newClient(conn))
+	ctx := context.Background()
+	first := portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "TCP", Name: "first"}
+	second := portmap.Mapping{ExternalPort: 80, InternalPort: 8081, Protocol: "TCP", Name: "second"}
+
+	g.add(ctx, first)
+	assert.True(t, g.remove(ctx, first, false))
+	g.add(ctx, second)
+
+	forwarded, deleted := conn.Snapshot()
+	assert.Empty(t, deleted, "without cleanup the port stays open")
+	assert.Equal(t, []int{8080, 8081}, []int{forwarded[0].InternalPort, forwarded[1].InternalPort}, "the next container takes the port over")
+}
+
+func TestManager_PollAndForwardReportsReleasedPorts(t *testing.T) {
+	g := &Manager{}
+	g.SetGateway(newClient(&upnptest.Connection{}))
+	provider := &MockEventPortProvider{AddCh: make(chan portmap.Mapping), DeleteCh: make(chan portmap.Mapping, 1)}
+	provider.DeleteCh <- portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}
+	g.eventProviders = []providers.EventPortProvider{provider}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	released := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		g.PollAndForward(ctx, false, func() { close(released) })
+		close(done)
+	}()
+
+	select {
+	case <-released:
+	case <-time.After(waitTimeout):
+		t.Fatal("released was not called")
+	}
+	cancel()
+	<-done
 }

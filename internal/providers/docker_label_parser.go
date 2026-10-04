@@ -73,15 +73,17 @@ func parseLabel(label string, info containerInfo, parse func(spec string) (portm
 func publishedPorts(info containerInfo) []portmap.Mapping {
 	var mappings []portmap.Mapping
 	for _, port := range info.ports {
-		if !isForwardable(port) {
-			continue
-		}
-		mappings = append(mappings, portmap.Mapping{
+		mapping := portmap.Mapping{
 			ExternalPort: int(port.PublicPort),
 			InternalPort: int(port.PublicPort),
 			Protocol:     strings.ToUpper(port.Type),
 			Name:         info.name,
-		})
+		}
+		// Skips protocols UPnP cannot forward, such as SCTP.
+		if !isForwardable(port) || mapping.Validate() != nil {
+			continue
+		}
+		mappings = append(mappings, mapping)
 	}
 
 	return mappings

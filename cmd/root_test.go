@@ -73,7 +73,7 @@ func TestSettings_Defaults(t *testing.T) {
 func TestSettings_DefaultConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	writeConfigAt(t, dir+"/config.yaml", "ttl: 2h\n")
+	writeConfigAt(t, dir+"/gangplank.yaml", "ttl: 2h\n")
 
 	a, err := settingsOf(t)
 	require.NoError(t, err)
@@ -88,6 +88,21 @@ func TestSettings_ConfigFileFromEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 30*time.Minute, a.opts.ttl)
 	assert.True(t, a.opts.poll)
+}
+
+func TestSettings_IgnoresHelpAndVersionVariables(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("GANGPLANK_HELP", "maybe")
+	t.Setenv("GANGPLANK_VERSION", "1.0")
+
+	_, err := settingsOf(t)
+	assert.NoError(t, err)
+}
+
+func TestSettings_PermanentLeaseFromConfig(t *testing.T) {
+	a, err := settingsOf(t, "--config", writeConfig(t, "ttl: 0s\n"))
+	require.NoError(t, err)
+	assert.Zero(t, a.opts.ttl)
 }
 
 func TestSettings_Errors(t *testing.T) {

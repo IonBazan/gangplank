@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/IonBazan/gangplank/internal/config"
+	"github.com/IonBazan/gangplank/internal/gangplank"
 	"github.com/IonBazan/gangplank/internal/upnp"
 )
 
@@ -29,7 +30,7 @@ const envPrefix = "GANGPLANK"
 var (
 	version = "unknown"
 	commit  = "unknown"
-	created = "an unknown date"
+	created = "unknown"
 )
 
 type options struct {
@@ -52,7 +53,7 @@ type app struct {
 	opts options
 	cfg  *config.Config
 
-	connectGateway func(ctx context.Context) (*upnp.Client, error)
+	connectGateway func(ctx context.Context) (gangplank.Gateway, error)
 	newDocker      func() (*client.Client, error)
 }
 
@@ -66,12 +67,16 @@ func newApp() *app {
 	return a
 }
 
-func (a *app) defaultGateway(ctx context.Context) (*upnp.Client, error) {
+func (a *app) defaultGateway(ctx context.Context) (gangplank.Gateway, error) {
 	if a.opts.dryRun {
 		return upnp.NewDryRunClient(a.opts.ttl), nil
 	}
 
-	return upnp.NewClient(ctx, a.opts.localIP, a.opts.gateway, a.opts.ttl)
+	client, err := upnp.NewClient(ctx, a.opts.localIP, a.opts.gateway, a.opts.ttl)
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func Execute() {
@@ -96,7 +101,7 @@ func (a *app) rootCmd() *cobra.Command {
 	}
 
 	flags := root.PersistentFlags()
-	flags.StringVarP(&a.opts.configFile, "config", "c", "", "config file path (default: ./config.yaml if present)")
+	flags.StringVarP(&a.opts.configFile, "config", "c", "", "config file path (default: ./gangplank.yaml if present)")
 	flags.BoolVar(&a.opts.dryRun, "dry-run", false, "Do not apply changes - only list the ports")
 	flags.StringVar(&a.opts.localIP, "local-ip", "", "Local IP address to use for UPnP (default: auto-detected)")
 	flags.StringVar(&a.opts.gateway, "gateway", "", "UPnP gateway description URL, e.g. http://192.168.1.1:5000/rootDesc.xml (default: auto-detected)")
@@ -129,7 +134,7 @@ func (a *app) loadSettings(flags *pflag.FlagSet) error {
 
 	var firstErr error
 	flags.VisitAll(func(f *pflag.Flag) {
-		if firstErr != nil || f.Changed {
+		if firstErr != nil || f.Changed || f.Annotations[cobra.FlagSetByCobraAnnotation] != nil {
 			return
 		}
 		if err := setFromEnv(flags, f); err != nil || f.Changed {

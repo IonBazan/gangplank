@@ -6,5 +6,5 @@ logo.svg
 coverage.*
 *.cov
 dist
-config.yaml
-config.yml
+gangplank.yaml
+gangplank.yml

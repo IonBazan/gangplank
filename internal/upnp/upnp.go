@@ -138,11 +138,10 @@ func (u *Client) ForwardPorts(ctx context.Context, mappings []portmap.Mapping) e
 	var errs []error
 	for _, m := range mappings {
 		if err := u.addPortMapping(ctx, m.Normalize()); err != nil {
-			slog.Error("Failed to forward port", "port", m.Key(), "name", m.Name, "error", err)
-			errs = append(errs, fmt.Errorf("forward %d/%s: %w", m.ExternalPort, m.Protocol, err))
-		} else {
-			slog.Debug("Forwarded port", "port", m.Key(), "internal_port", m.InternalPort, "name", m.Name)
+			errs = append(errs, fmt.Errorf("forward %s: %w", m.Key(), err))
+			continue
 		}
+		slog.Debug("Forwarded port", "port", m.Key(), "internal_port", m.InternalPort, "name", m.Name)
 	}
 
 	return errors.Join(errs...)

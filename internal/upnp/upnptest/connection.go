@@ -20,9 +20,10 @@ type Connection struct {
 	Forwarded []portmap.Mapping
 	Deleted   []Deleted
 	// Existing is what the gateway lists. Lease is reported as the lease duration.
-	Existing   []Mapping
-	ForwardErr error
-	DeleteErr  error
+	Existing      []Mapping
+	ForwardErr    error
+	DeleteErr     error
+	ExternalIPErr error
 }
 
 func (c *Connection) Snapshot() ([]portmap.Mapping, []Deleted) {
@@ -33,6 +34,12 @@ func (c *Connection) Snapshot() ([]portmap.Mapping, []Deleted) {
 }
 
 func (c *Connection) GetExternalIPAddressCtx(context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.ExternalIPErr != nil {
+		return "", c.ExternalIPErr
+	}
 	return "203.0.113.1", nil
 }
 

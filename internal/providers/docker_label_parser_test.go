@@ -33,6 +33,23 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			},
 		},
 		{
+			name: "Published SCTP ports are skipped",
+			ctr: container.Summary{
+				ID:    "sip1234567890",
+				Names: []string{"/sip"},
+				Ports: []container.PortSummary{
+					{PublicPort: 5060, PrivatePort: 5060, Type: "udp"},
+					{PublicPort: 5060, PrivatePort: 5060, Type: "sctp"},
+				},
+				Labels: map[string]string{
+					labelForward: "published",
+				},
+			},
+			wantPorts: []portmap.Mapping{
+				{ExternalPort: 5060, InternalPort: 5060, Protocol: "UDP", Name: "sip"},
+			},
+		},
+		{
 			name: "Redis with host-referenced label",
 			ctr: container.Summary{
 				ID:    "redis4567890123",

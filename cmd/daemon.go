@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,15 +40,7 @@ func (a *app) daemonCmd() *cobra.Command {
 			defer func() { _ = dockerCli.Close() }()
 			slog.Info("Using Docker", "host", dockerCli.DaemonHost())
 
-			connect := func(ctx context.Context) (gangplank.Gateway, error) {
-				gateway, err := a.connectGateway(ctx)
-				if err != nil {
-					return nil, err
-				}
-				return gateway, nil
-			}
-
-			gangplank.NewDaemon(gangplank.NewManager(a.cfg, dockerCli), connect, gangplank.DaemonOptions{
+			gangplank.NewDaemon(gangplank.NewManager(a.cfg, dockerCli), a.connectGateway, gangplank.DaemonOptions{
 				RefreshInterval: a.opts.refreshInterval,
 				Poll:            a.opts.poll,
 				CleanupOnStop:   a.opts.cleanupOnStop,

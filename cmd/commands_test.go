@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/IonBazan/gangplank/internal/gangplank"
 	"github.com/IonBazan/gangplank/internal/upnp"
 	"github.com/IonBazan/gangplank/internal/upnp/upnptest"
 )
@@ -94,7 +95,7 @@ func gatewayArgs(igd *upnptest.IGD) []string {
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.yaml")
+	path := filepath.Join(t.TempDir(), "gangplank.yaml")
 	writeConfigAt(t, path, content)
 	return path
 }
@@ -279,7 +280,7 @@ func TestDaemonCommand_RetriesGateway(t *testing.T) {
 	conn := &upnptest.Connection{}
 
 	var attempts atomic.Int32
-	a.connectGateway = func(context.Context) (*upnp.Client, error) {
+	a.connectGateway = func(context.Context) (gangplank.Gateway, error) {
 		if attempts.Add(1) < 3 {
 			return nil, errors.New("router is booting")
 		}
