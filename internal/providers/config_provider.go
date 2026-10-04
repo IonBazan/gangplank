@@ -17,8 +17,7 @@ func NewConfigPortProvider(config *config.Config) *ConfigPortProvider {
 	return &ConfigPortProvider{config}
 }
 
-// GetPortMappings returns the valid mappings from the config file. Invalid
-// entries are skipped and reported in the returned error.
+// Invalid entries are skipped and reported in the returned error.
 func (f *ConfigPortProvider) GetPortMappings(_ context.Context) ([]types.PortMapping, error) {
 	if f.config == nil {
 		return []types.PortMapping{}, nil

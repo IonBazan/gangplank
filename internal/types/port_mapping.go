@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// PortMapping represents a single port mapping configuration.
 type PortMapping struct {
 	ExternalPort int    `mapstructure:"externalPort" yaml:"externalPort"`
 	InternalPort int    `mapstructure:"internalPort" yaml:"internalPort"`
@@ -15,12 +14,10 @@ type PortMapping struct {
 	Name         string `mapstructure:"name" yaml:"name"`
 }
 
-// Key uniquely identifies a mapping on the gateway (external port and protocol).
 func (p PortMapping) Key() string {
 	return fmt.Sprintf("%d/%s", p.ExternalPort, p.Protocol)
 }
 
-// Normalize upper-cases the protocol and defaults it to TCP when empty.
 func (p PortMapping) Normalize() PortMapping {
 	p.Protocol = strings.ToUpper(strings.TrimSpace(p.Protocol))
 	if p.Protocol == "" {
@@ -45,29 +42,26 @@ func (p PortMapping) Validate() error {
 	return nil
 }
 
-// ParsePortMapping parses a string in the format "<external>:<internal>/<protocol>", "<external>:<internal>", or "<port>".
-// If no protocol is provided, it defaults to TCP.
-// If a single port is provided, it is used for both external and internal ports.
+// ParsePortMapping parses "<external>:<internal>[/<protocol>]" or "<port>[/<protocol>]".
+// An omitted side of the colon copies the other one. The protocol defaults to TCP.
 func ParsePortMapping(mappingStr string) (PortMapping, error) {
 	var mapping PortMapping
 
 	parts := strings.Split(mappingStr, "/")
-	protocol := "TCP" // Default to TCP if no protocol is provided
+	protocol := "TCP"
 	if len(parts) == 2 {
-		protocol = strings.ToUpper(parts[1])
+		protocol = strings.ToUpper(strings.TrimSpace(parts[1]))
 	} else if len(parts) != 1 {
 		return mapping, errors.New("invalid format: expected <external>:<internal>[/<protocol>] or <port>")
 	}
 	mapping.Protocol = protocol
 
-	// Parse the port part (e.g., "8080:80", "8080", ":80", "80:")
 	ports := strings.Split(parts[0], ":")
 	var extPort, intPort int
 	var err error
 
 	switch len(ports) {
 	case 1:
-		// Single port provided (e.g., "8080")
 		if ports[0] == "" {
 			return mapping, errors.New("invalid port format: port cannot be empty")
 		}
@@ -76,7 +70,6 @@ func ParsePortMapping(mappingStr string) (PortMapping, error) {
 		}
 		intPort = extPort
 	case 2:
-		// External and/or internal ports provided (e.g., "8080:80", ":80", "80:")
 		extPortStr, intPortStr := ports[0], ports[1]
 
 		if extPortStr == "" && intPortStr == "" {

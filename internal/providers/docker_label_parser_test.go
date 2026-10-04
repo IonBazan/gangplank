@@ -160,6 +160,58 @@ func TestExtractPortsFromContainer(t *testing.T) {
 			},
 		},
 		{
+			name: "Container-referenced label edge cases",
+			ctr: container.Summary{
+				ID:    "edge1234567890",
+				Names: []string{"/edge"},
+				Ports: []container.PortSummary{
+					{PublicPort: 32768, PrivatePort: 80, Type: "tcp"},
+					{IP: netip.MustParseAddr("127.0.0.1"), PublicPort: 32769, PrivatePort: 81, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					// Invalid spec, wrong protocol, loopback-only binding and empty entries are skipped.
+					labelForwardContainer: "abc/tcp, 80/udp, 81/tcp, , 80",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 80, InternalPort: 32768, Protocol: "TCP", Name: "edge"},
+			},
+		},
+		{
+			name: "Published keyword in container-referenced label",
+			ctr: container.Summary{
+				ID:    "pub12345678901",
+				Names: []string{"/pub"},
+				Ports: []container.PortSummary{
+					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
+					{PrivatePort: 9000, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForwardContainer: "published",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "pub"},
+			},
+		},
+		{
+			name: "Both labels requesting the same port are merged",
+			ctr: container.Summary{
+				ID:    "both1234567890",
+				Names: []string{"/both"},
+				Ports: []container.PortSummary{
+					{PublicPort: 8080, PrivatePort: 80, Type: "tcp"},
+				},
+				Labels: map[string]string{
+					labelForward:          "8080",
+					labelForwardContainer: "8080:80",
+				},
+			},
+			wantPorts: []types.PortMapping{
+				{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "both"},
+			},
+		},
+		{
 			name: "Short ID without name",
 			ctr: container.Summary{
 				ID:    "short123",

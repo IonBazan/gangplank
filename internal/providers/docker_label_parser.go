@@ -94,8 +94,6 @@ func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []t
 	return mappings
 }
 
-// resolveContainerPort parses "[<external>:]<container port>[/<protocol>]" and maps
-// the external port to the host port Docker published the container port on.
 // When the external port is omitted, the container port number is used.
 func resolveContainerPort(spec string, ports []container.PortSummary) (types.PortMapping, error) {
 	mapping, err := types.ParsePortMapping(spec)
@@ -117,12 +115,11 @@ func resolveContainerPort(spec string, ports []container.PortSummary) (types.Por
 	return mapping, fmt.Errorf("container port %d/%s is not published", containerPort, mapping.Protocol)
 }
 
-// isForwardable reports whether the port is published on an address reachable from the LAN.
 func isForwardable(port container.PortSummary) bool {
 	return port.PublicPort != 0 && !port.IP.IsLoopback()
 }
 
-// dedupe drops repeated mappings (e.g. Docker reports both 0.0.0.0 and :: bindings).
+// Docker reports each binding twice, for 0.0.0.0 and ::.
 func dedupe(mappings []types.PortMapping) []types.PortMapping {
 	seen := make(map[string]bool, len(mappings))
 	result := mappings[:0]
@@ -145,7 +142,6 @@ func shortID(id string) string {
 	return id[:maxLen]
 }
 
-// portsFromInspect converts inspect port bindings to the summary format used by the label parser.
 func portsFromInspect(info container.InspectResponse) []container.PortSummary {
 	if info.NetworkSettings == nil {
 		return nil

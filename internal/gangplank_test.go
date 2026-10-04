@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/IonBazan/gangplank/internal/config"
 	"github.com/IonBazan/gangplank/internal/providers"
 	"github.com/IonBazan/gangplank/internal/types"
 	"github.com/IonBazan/gangplank/internal/upnp"
@@ -245,4 +246,116 @@ func TestGangplank_PollAndForward(t *testing.T) {
 			assert.Equal(t, tt.wantDeleted, deleted)
 		})
 	}
+}
+
+type failingForwarder struct {
+	*upnp.Client
+	listErr error
+}
+
+func (f failingForwarder) ListPortMappings(ctx context.Context) ([]upnp.PortMappingEntry, error) {
+	return nil, f.listErr
+}
+
+func TestNewGangplank(t *testing.T) {
+	g := NewGangplank(&config.Config{}, nil)
+
+	require.Len(t, g.PortProviders, 2)
+	assert.IsType(t, &providers.ConfigPortProvider{}, g.PortProviders[0])
+	assert.IsType(t, &providers.DockerPortProvider{}, g.PortProviders[1])
+	require.Len(t, g.EventPortProviders, 1)
+	assert.IsType(t, &providers.DockerEventPortProvider{}, g.EventPortProviders[0])
+
+	assert.False(t, g.HasForwarder())
+	g.SetForwarder(newClient(&upnp.DummyConnection{}))
+	assert.True(t, g.HasForwarder())
+	g.SetForwarder(nil)
+	assert.False(t, g.HasForwarder())
+}
+
+func TestGangplank_WithoutForwarder(t *testing.T) {
+	g := &Gangplank{}
+	ports := []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}
+
+	assert.NoError(t, g.Sync(context.Background(), ports, true))
+	assert.NoError(t, g.Cleanup(context.Background()))
+	g.delete(context.Background(), ports[0])
+}
+
+func TestGangplank_SyncReportsPruneErrors(t *testing.T) {
+	desired := []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}
+
+	t.Run("List fails", func(t *testing.T) {
+		g := &Gangplank{}
+		g.SetForwarder(failingForwarder{Client: newClient(&upnp.DummyConnection{}), listErr: errors.New("list failed")})
+
+		err := g.Sync(context.Background(), desired, true)
+		assert.ErrorContains(t, err, "failed to list gateway mappings")
+	})
+
+	t.Run("Delete fails", func(t *testing.T) {
+		conn := &upnp.DummyConnection{
+			DeleteErr: errors.New("delete failed"),
+			Existing: []upnp.PortMappingEntry{
+				{ExternalPort: 81, Protocol: "tcp", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: old"},
+			},
+		}
+		g := &Gangplank{}
+		g.SetForwarder(newClient(conn))
+
+		err := g.Sync(context.Background(), desired, true)
+		assert.ErrorContains(t, err, "prune 81/TCP")
+	})
+}
+
+func TestGangplank_SyncReplacesForwardedSet(t *testing.T) {
+	conn := &upnp.DummyConnection{}
+	g := &Gangplank{}
+	g.SetForwarder(newClient(conn))
+	ctx := context.Background()
+
+	require.NoError(t, g.Sync(ctx, []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}, false))
+	require.NoError(t, g.Sync(ctx, []types.PortMapping{{ExternalPort: 443, InternalPort: 443, Protocol: "TCP"}}, false))
+	require.NoError(t, g.Cleanup(ctx))
+
+	// Only the latest desired set is cleaned up.
+	_, deleted := conn.Snapshot()
+	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 443, Protocol: "TCP"}}, deleted)
+}
+
+func TestGangplank_CleanupReportsErrors(t *testing.T) {
+	conn := &upnp.DummyConnection{}
+	g := &Gangplank{}
+	g.SetForwarder(newClient(conn))
+	require.NoError(t, g.ForwardPorts(context.Background(), []types.PortMapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
+
+	conn.DeleteErr = errors.New("delete failed")
+	assert.ErrorContains(t, g.Cleanup(context.Background()), "delete 80/TCP")
+}
+
+func TestGangplank_PollAndForwardSurvivesErrors(t *testing.T) {
+	conn := &upnp.DummyConnection{ForwardErr: errors.New("forward failed"), DeleteErr: errors.New("delete failed")}
+	g := &Gangplank{}
+	g.SetForwarder(newClient(conn))
+
+	provider := &MockEventPortProvider{AddCh: make(chan types.PortMapping, 2), DeleteCh: make(chan types.PortMapping, 1)}
+	provider.AddCh <- types.PortMapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}
+	provider.DeleteCh <- types.PortMapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}
+	provider.AddCh <- types.PortMapping{ExternalPort: 81, InternalPort: 81, Protocol: "TCP"}
+	g.EventPortProviders = []providers.EventPortProvider{provider}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		g.PollAndForward(ctx, true)
+		close(done)
+	}()
+
+	// Errors are logged and the loop keeps consuming events.
+	assert.Eventually(t, func() bool {
+		return len(provider.AddCh) == 0 && len(provider.DeleteCh) == 0
+	}, time.Second, 5*time.Millisecond)
+
+	cancel()
+	<-done
 }

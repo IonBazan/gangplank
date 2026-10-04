@@ -30,6 +30,8 @@ type MockEventClient struct {
 	subscribe chan struct{}
 	Running   []container.Summary
 	Inspect   map[string]container.InspectResponse
+	// ListErrs are returned by successive ContainerList calls before it succeeds.
+	ListErrs []error
 }
 
 func newMockEventClient(streams int) *MockEventClient {
@@ -57,6 +59,11 @@ func (m *MockEventClient) Events(ctx context.Context, options client.EventsListO
 func (m *MockEventClient) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(m.ListErrs) > 0 {
+		err := m.ListErrs[0]
+		m.ListErrs = m.ListErrs[1:]
+		return client.ContainerListResult{}, err
+	}
 	return client.ContainerListResult{Items: append([]container.Summary(nil), m.Running...)}, nil
 }
 
@@ -168,7 +175,6 @@ func TestDockerEventPortProvider_Listen(t *testing.T) {
 	}
 }
 
-// streamsSend delivers a message on the stream most recently handed out.
 func (m *MockEventClient) streamsSend(msg events.Message) {
 	m.mu.Lock()
 	s := m.current
@@ -262,4 +268,100 @@ func TestDockerEventPortProvider_NilDeleteChannel(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Listen did not return after cancel")
 	}
+}
+
+func TestDockerEventPortProvider_RetriesWhenDockerIsUnavailable(t *testing.T) {
+	mockClient := newMockEventClient(0)
+	mockClient.ListErrs = []error{errors.New("docker down"), errors.New("still down")}
+	mockClient.Inspect["app12345678901"] = inspectResponse("app12345678901", "app", map[string]string{labelForward: "8080"}, nil)
+	provider := NewDockerEventPortProvider(mockClient)
+	provider.retryDelay = time.Millisecond
+
+	addCh := make(chan types.PortMapping, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go provider.Listen(ctx, PortEventChannels{Add: addCh})
+
+	// Two failed attempts, then a working connection.
+	waitSubscribed(t, mockClient)
+	waitSubscribed(t, mockClient)
+	waitSubscribed(t, mockClient)
+
+	mockClient.streamsSend(events.Message{Action: events.ActionStart, Actor: events.Actor{ID: "app12345678901"}})
+	assert.Equal(t, []types.PortMapping{{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "app"}}, collect(addCh, 1))
+}
+
+func TestDockerEventPortProvider_ReconnectsWhenStreamCloses(t *testing.T) {
+	mockClient := newMockEventClient(1)
+	provider := NewDockerEventPortProvider(mockClient)
+	provider.retryDelay = time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go provider.Listen(ctx, PortEventChannels{})
+
+	waitSubscribed(t, mockClient)
+	mockClient.mu.Lock()
+	close(mockClient.current.msgs)
+	mockClient.mu.Unlock()
+	waitSubscribed(t, mockClient)
+}
+
+func TestDockerEventPortProvider_IgnoresUninspectableContainers(t *testing.T) {
+	mockClient := newMockEventClient(1)
+	provider := NewDockerEventPortProvider(mockClient)
+
+	addCh := make(chan types.PortMapping, 10)
+	deleteCh := make(chan types.PortMapping, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go provider.Listen(ctx, PortEventChannels{Add: addCh, Delete: deleteCh})
+	waitSubscribed(t, mockClient)
+
+	// Unknown container: inspect fails, and its stop has nothing to delete.
+	mockClient.streamsSend(events.Message{Action: events.ActionStart, Actor: events.Actor{ID: "gone"}})
+	mockClient.streamsSend(events.Message{Action: events.ActionStop, Actor: events.Actor{ID: "gone"}})
+	// Other actions are ignored.
+	mockClient.streamsSend(events.Message{Action: events.ActionRestart, Actor: events.Actor{ID: "gone"}})
+
+	assertNoMore(t, addCh)
+	assertNoMore(t, deleteCh)
+}
+
+func TestSend_StopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		// Unbuffered channel without a reader would block forever.
+		send(ctx, make(chan types.PortMapping), []types.PortMapping{{ExternalPort: 80}})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("send blocked after cancel")
+	}
+}
+
+func TestPortsFromInspect(t *testing.T) {
+	assert.Nil(t, portsFromInspect(container.InspectResponse{}))
+
+	info := inspectResponse("id", "name", nil, network.PortMap{
+		network.MustParsePort("80/tcp"): {
+			{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"},
+			{HostIP: netip.MustParseAddr("::1"), HostPort: "8081"},
+			{HostPort: ""},
+			{HostPort: "abc"},
+			{HostPort: "70000"},
+		},
+		network.MustParsePort("53/udp"): nil,
+	})
+
+	assert.Equal(t, []container.PortSummary{
+		{IP: netip.MustParseAddr("0.0.0.0"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+		{IP: netip.MustParseAddr("::1"), PrivatePort: 80, PublicPort: 8081, Type: "tcp"},
+	}, portsFromInspect(info))
 }

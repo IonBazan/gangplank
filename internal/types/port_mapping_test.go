@@ -159,3 +159,60 @@ func TestPortMapping_Normalize(t *testing.T) {
 	assert.Equal(t, "UDP", PortMapping{Protocol: " udp "}.Normalize().Protocol)
 	assert.Equal(t, "8080/TCP", PortMapping{ExternalPort: 8080, Protocol: "tcp"}.Normalize().Key())
 }
+
+func TestParsePortMapping_EdgeCases(t *testing.T) {
+	tests := []struct {
+		input       string
+		want        PortMapping
+		errContains string
+	}{
+		{input: " 8080 : 80 / tcp ", want: PortMapping{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP"}},
+		{input: "8080: 80/udp", want: PortMapping{ExternalPort: 8080, InternalPort: 80, Protocol: "UDP"}},
+		{input: "80/TCP", want: PortMapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}},
+		{input: "65535", want: PortMapping{ExternalPort: 65535, InternalPort: 65535, Protocol: "TCP"}},
+		{input: "1:2:3", errContains: "invalid port format"},
+		{input: "80/tcp/udp", errContains: "invalid format"},
+		{input: "80/", errContains: "protocol must be"},
+		{input: "-1", errContains: "port must be a number"},
+		{input: "abc", errContains: "port must be a number"},
+		{input: "8080:", want: PortMapping{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP"}},
+		{input: ":8080/udp", want: PortMapping{ExternalPort: 8080, InternalPort: 8080, Protocol: "UDP"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := ParsePortMapping(tt.input)
+			if tt.errContains != "" {
+				assert.ErrorContains(t, err, tt.errContains)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestPortMapping_Validate(t *testing.T) {
+	tests := []struct {
+		name        string
+		mapping     PortMapping
+		errContains string
+	}{
+		{name: "Valid lowercase protocol", mapping: PortMapping{ExternalPort: 1, InternalPort: 65535, Protocol: "udp"}},
+		{name: "External too high", mapping: PortMapping{ExternalPort: 70000, InternalPort: 80, Protocol: "TCP"}, errContains: "external port"},
+		{name: "Internal missing", mapping: PortMapping{ExternalPort: 80, Protocol: "TCP"}, errContains: "internal port"},
+		{name: "Empty protocol", mapping: PortMapping{ExternalPort: 80, InternalPort: 80}, errContains: "protocol must be"},
+		{name: "SCTP is not supported", mapping: PortMapping{ExternalPort: 80, InternalPort: 80, Protocol: "sctp"}, errContains: "protocol must be"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.mapping.Validate()
+			if tt.errContains == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tt.errContains)
+			}
+		})
+	}
+}

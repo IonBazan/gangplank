@@ -19,16 +19,14 @@ const (
 	maxRetryDelay     = 30 * time.Second
 )
 
-// EventInspector defines the minimal interface for DockerEventPortProvider.
 type EventInspector interface {
 	ContainerLister
 	Events(ctx context.Context, options client.EventsListOptions) client.EventsResult
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 }
 
-// DockerEventPortProvider emits mappings as containers start and stop.
-// It remembers what each container exposed when it started, because Docker
-// clears port bindings once a container stops.
+// DockerEventPortProvider remembers what each container exposed when it started,
+// because Docker clears port bindings once a container stops.
 type DockerEventPortProvider struct {
 	dockerCli  EventInspector
 	retryDelay time.Duration
@@ -45,9 +43,8 @@ func NewDockerEventPortProvider(cli EventInspector) *DockerEventPortProvider {
 	}
 }
 
-// Listen streams Docker events until ctx is cancelled, reconnecting with
-// backoff when the stream fails. After a reconnect it resyncs running containers
-// so events missed while disconnected are not lost.
+// After a reconnect, running containers are resynced so that events missed
+// while disconnected are not lost.
 func (d *DockerEventPortProvider) Listen(ctx context.Context, events PortEventChannels) {
 	delay := d.retryDelay
 	first := true
@@ -109,8 +106,7 @@ func (d *DockerEventPortProvider) listenOnce(ctx context.Context, events PortEve
 	}
 }
 
-// sync records the mappings of running containers. When emit is set, it also
-// reports containers that started or stopped since the previous sync.
+// With emit, containers that started or stopped since the previous sync are reported.
 func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChannels, emit bool) error {
 	current, err := listContainerMappings(ctx, d.dockerCli)
 	if err != nil {

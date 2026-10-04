@@ -22,12 +22,13 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          # golangci-lint must be built with a Go version at least as new as the one it analyzes.
-          go-version-file: go.mod
+          go-version: stable
 
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14
+          # Build from source so the linter understands the installed Go version.
+          install-mode: goinstall
 
   test:
     name: Test with Coverage
@@ -45,7 +46,7 @@ jobs:
           git diff --exit-code go.mod go.sum
 
       - name: Run tests
-        run: go test ./... -race -coverprofile=coverage.out -covermode=atomic
+        run: go test ./... -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic
 
       - name: Show coverage
         run: go tool cover -func=coverage.out

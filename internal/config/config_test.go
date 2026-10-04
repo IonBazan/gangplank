@@ -48,3 +48,38 @@ func TestLoadConfig_Missing(t *testing.T) {
 	_, err := LoadConfig(filepath.Join(t.TempDir(), "missing.yaml"))
 	assert.Error(t, err)
 }
+
+func TestLoadConfig_DefaultLocation(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("ttl: 5m\n"), 0o600))
+	t.Chdir(dir)
+
+	cfg, err := LoadConfig("")
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Minute, cfg.Ttl)
+}
+
+func TestLoadConfig_DefaultLocationMissing(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	_, err := LoadConfig("")
+	assert.Error(t, err)
+}
+
+func TestLoadConfig_Invalid(t *testing.T) {
+	tests := map[string]string{
+		"Malformed YAML": "ports: [\n",
+		"Wrong type":     "ports: not-a-list\n",
+		"Bad duration":   "ttl: forever\n",
+	}
+
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			_, err := LoadConfig(path)
+			assert.Error(t, err)
+		})
+	}
+}

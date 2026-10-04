@@ -15,19 +15,17 @@ type DeletedMapping struct {
 	Protocol string
 }
 
-// DummyConnection is a mock UPnP client that echoes requests for testing.
-// It is safe for concurrent use; read results with Snapshot.
+// DummyConnection is used for --dry-run and tests. Read results with Snapshot.
 type DummyConnection struct {
 	mu        sync.Mutex
 	Forwarded []types.PortMapping
 	Deleted   []DeletedMapping
-	// Existing, when non-nil, is returned by GetGenericPortMappingEntryCtx instead of the default sample entry.
+	// When set, listed instead of the default sample entry.
 	Existing   []PortMappingEntry
 	ForwardErr error
 	DeleteErr  error
 }
 
-// Snapshot returns copies of the recorded forwarded and deleted mappings.
 func (c *DummyConnection) Snapshot() ([]types.PortMapping, []DeletedMapping) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -110,7 +108,6 @@ func (c *DummyConnection) GetGenericPortMappingEntryCtx(
 	return "", 0, "", 0, "", false, "", 0, NewUPnPError(errCodeSpecifiedArrayIndexInvalid, "SpecifiedArrayIndexInvalid")
 }
 
-// NewUPnPError builds a SOAP fault carrying the given UPnP error code.
 func NewUPnPError(code int, description string) error {
 	serr := &soap.SOAPFaultError{FaultCode: "s:Client", FaultString: "UPnPError"}
 	serr.Detail.UPnPError.Errorcode = code

@@ -1,95 +1,113 @@
-## Usage examples
+# Usage examples
 
-You can control which ports are exposed and how they are mapped using labels in your Docker containers or by specifying them in a YAML file.
+You choose what Gangplank forwards with labels on your containers, or with a YAML file for services that don't run in Docker.
 
-Let's look at some examples. Assuming you have a Gangplank container already running as daemon and your host machine IP is `192.168.1.10`.
+The examples below assume Gangplank is already running as a daemon and your Docker host has the IP address `192.168.1.10`.
 
-### Expose all ports from a container
+## How forwarding works
 
-Using `gangplank.forward="published"` will expose all published ports of the container to the world on the same port numbers as on the host:
+Your router sends traffic from an external port to a port on your Docker host. Docker then passes it on to the container.
+So the "internal port" in a router mapping is always the port **on the host**, not the port inside the container.
 
-```yaml
-services:
-  nginx:
-    image: nginx
-    ports:
-     - "80:80"
-     - "8443:443"
-    labels:
-      gangplank.forward: "published" # Expose host ports 80 and 8443 to the world
-```
+## Forward all published ports
 
-Following UPnP rules will be created:
-```
-- ExternalPort=80, InternalPort=80, Protocol=TCP, InternalIP=192.168.1.10
-- ExternalPort=8443, InternalPort=8443, Protocol=TCP, InternalIP=192.168.1.10
-```
-
-Ports published only on a loopback address (e.g. `127.0.0.1:9000:9000`) are skipped.
-
-### Expose specific host ports
-
-`gangplank.forward` also accepts a comma-separated list of `<external>:<host port>[/<protocol>]` entries (or just `<port>[/<protocol>]` when both are the same).
-The internal port is the port **on the host** that Docker published, because that is where the router sends the traffic.
-For example, to expose only port 443:
+`gangplank.forward: "published"` forwards every port the container publishes on the host, using the same port number outside:
 
 ```yaml
 services:
   nginx:
     image: nginx
     ports:
-     - "80:80"
-     - "443:443"
+      - "80:80"
+      - "8443:443"
     labels:
-      gangplank.forward: "443:443/tcp" # Only expose port 443 to the world
+      gangplank.forward: "published"
 ```
 
-Following UPnP rules will be created:
+Router mappings:
 
 ```
-- ExternalPort=443, InternalPort=443, Protocol=TCP, InternalIP=192.168.1.10
+External 80   -> 192.168.1.10:80   (TCP)
+External 8443 -> 192.168.1.10:8443 (TCP)
 ```
 
-### Expose container ports published on random host ports
+Ports published only on a loopback address, like `127.0.0.1:9000:9000`, are skipped. The router can't reach them anyway.
 
-When Docker assigns a random host port (e.g. `ports: ["80"]`), use the `gangplank.forward.container` label.
-It refers to **container** ports and Gangplank looks up the host port Docker bound them to.
-The format is a comma-separated list of `[<external>:]<container port>[/<protocol>]`. When the external port is omitted, the container port number is used.
+## Forward specific host ports
 
-For example, to expose container port 80 on external port 8080:
+You can also give `gangplank.forward` a comma-separated list of ports.
+Each entry is `<external>:<host port>`, or just `<port>` when both are the same. Add `/udp` for UDP; TCP is the default.
+
 ```yaml
 services:
   nginx:
     image: nginx
     ports:
-     - "80" # Docker assigns a random host port (e.g. 32768)
+      - "80:80"
+      - "443:443"
     labels:
-      gangplank.forward.container: "8080:80/tcp" # External 8080 -> container port 80
+      gangplank.forward: "443"
 ```
 
-If Docker assigns host port `32768` to container port `80`, Gangplank creates the following UPnP rule:
+Router mapping:
 
 ```
-- ExternalPort=8080, InternalPort=32768, Protocol=TCP, InternalIP=192.168.1.10
+External 443 -> 192.168.1.10:443 (TCP)
 ```
 
-With `gangplank.forward.container: "80/tcp"` the external port would be `80` instead.
+A game server with a TCP and a UDP port could use `gangplank.forward: "25565, 19132/udp"`.
 
-### Static port mapping
+## Forward container ports on random host ports
 
-If you want to expose specific ports for services that are not running in Docker containers, you can set up static port mappings in a YAML file.
-Gangplank reads `config.yaml` from its working directory (`/app/config.yaml` inside the container) or the file passed with `--config`:
+When you let Docker pick the host port (for example `ports: ["80"]`), you don't know the host port in advance.
+Use `gangplank.forward.container` instead. It takes **container** ports, and Gangplank looks up which host port Docker picked.
+
+Each entry is `[<external>:]<container port>[/<protocol>]`. Without an external port, the container port number is used.
+
+```yaml
+services:
+  nginx:
+    image: nginx
+    ports:
+      - "80" # Docker picks a host port, for example 32768
+    labels:
+      gangplank.forward.container: "8080:80"
+```
+
+Router mapping, if Docker picked `32768`:
+
+```
+External 8080 -> 192.168.1.10:32768 (TCP)
+```
+
+With `gangplank.forward.container: "80"` the external port would be `80`.
+
+If the container port is not published at all, Gangplank logs a warning and skips it.
+
+## Containers using the host network
+
+Containers with `network_mode: host` don't publish ports, so `published` and `gangplank.forward.container` find nothing.
+List the ports with `gangplank.forward` instead, for example `gangplank.forward: "32400"`.
+
+## Static ports from a YAML file
+
+For services outside Docker, list the ports in a YAML file.
+Gangplank reads `config.yaml` from its working directory (`/app/config.yaml` in the image), or the file given with `--config`.
 
 ```yaml
 ports:
   - externalPort: 80
     internalPort: 80
-    protocol: TCP # optional, defaults to TCP
     name: nginx HTTP
-  - externalPort: 443
-    internalPort: 443
-    name: nginx HTTPS
+  - externalPort: 51820
+    internalPort: 51820
+    protocol: UDP
+    name: WireGuard
 ```
+
+`protocol` is optional and defaults to TCP.
+
+Mount the file into the container:
 
 ```bash
 docker run -d --network host --restart unless-stopped \
@@ -98,11 +116,14 @@ docker run -d --network host --restart unless-stopped \
     ionbazan/gangplank:latest
 ```
 
-These ports are forwarded to the specified internal ports on your host machine, together with the ones discovered from Docker.
-An invalid entry is reported and skipped without affecting the others.
+These ports are forwarded together with the ones from your containers.
+If an entry is invalid, Gangplank logs an error and skips only that entry.
 
-If two sources request the same external port and protocol, the first one wins (the YAML file first, then containers sorted by name) and a warning is logged.
+## When two services want the same port
 
-## Advanced Usage
+If two sources ask for the same external port and protocol, the first one wins and Gangplank logs a warning.
+The YAML file comes first, then containers sorted by name.
 
-You can find more advanced usage examples in the [advanced usage documentation](advanced.md).
+## More
+
+See the [advanced guide](advanced.md) for all options, environment variables and commands.

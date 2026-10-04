@@ -38,7 +38,7 @@ var (
 				log.Printf("Warning: refresh interval (%s) is not shorter than the lease TTL (%s); mappings may expire between refreshes", refreshInterval, ttl)
 			}
 
-			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
 			log.Println("Starting Gangplank daemon...")
@@ -102,8 +102,7 @@ var (
 	}
 )
 
-// connectUPnP initializes the UPnP client if needed, so that a gateway that is
-// unreachable at startup (e.g. still booting) is picked up later.
+// Retried on every refresh, so a router that is still booting is picked up later.
 func connectUPnP(ctx context.Context, gp *internal.Gangplank) bool {
 	if gp.HasForwarder() {
 		return true
