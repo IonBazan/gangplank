@@ -3,7 +3,35 @@ version: "2"
 linters:
   enable:
     - errorlint
+    - gocritic
     - misspell
+    - nolintlint
+    - revive
+    - unparam
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+          arguments:
+            - allowTypesBefore: "*testing.T"
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
 
 formatters:
   enable:
@@ -13,3 +41,7 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/IonBazan/gangplank
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

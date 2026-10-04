@@ -69,7 +69,7 @@ type IGD struct {
 func NewIGD(t interface{ Cleanup(func()) }) *IGD {
 	g := &IGD{ExternalIP: "203.0.113.7", mappings: map[string]Mapping{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/rootDesc.xml", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/rootDesc.xml", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/xml")
 		_, _ = io.WriteString(w, rootDesc)
 	})

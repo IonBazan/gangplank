@@ -3,7 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os/signal"
 	"syscall"
 
@@ -22,7 +22,6 @@ func (a *app) forwardCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			log.Println("Starting Gangplank...")
 			dockerCli, err := a.newDocker()
 			if err != nil {
 				return err
@@ -31,13 +30,15 @@ func (a *app) forwardCmd() *cobra.Command {
 
 			manager := gangplank.NewManager(a.cfg, dockerCli)
 			ports, fetchErr := manager.GetPortMappings(ctx)
-			gangplank.LogMappings(ports)
+			for _, p := range ports {
+				gangplank.LogMapping(p)
+			}
 
 			gateway, err := a.connectGateway(ctx)
 			if err != nil {
 				return errors.Join(fetchErr, err)
 			}
-			log.Printf("UPnP client initialized with local IP: %s", gateway.InternalIP())
+			slog.Info("Connected to UPnP gateway", "local_ip", gateway.InternalIP())
 			manager.SetGateway(gateway)
 
 			if err := manager.Sync(ctx, ports, false); err != nil {

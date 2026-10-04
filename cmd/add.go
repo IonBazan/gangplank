@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 
@@ -31,7 +31,7 @@ func (a *app) addCmd() *cobra.Command {
 			if err := gateway.ForwardPorts(cmd.Context(), []portmap.Mapping{mapping}); err != nil {
 				return err
 			}
-			log.Printf("Successfully added port mapping %s", mapping.Key())
+			slog.Info("Added port mapping", "port", mapping.Key(), "name", mapping.Name)
 			return nil
 		},
 	}

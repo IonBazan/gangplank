@@ -3,7 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -57,7 +57,7 @@ func (d *DockerEventPortProvider) Listen(ctx context.Context, events PortEventCh
 			first = false
 			delay = d.retryDelay
 		}
-		log.Printf("Docker event stream interrupted: %v, reconnecting in %s", err, delay)
+		slog.Warn("Docker event stream interrupted, reconnecting", "error", err, "retry_in", delay)
 
 		select {
 		case <-ctx.Done():
@@ -144,7 +144,7 @@ func (d *DockerEventPortProvider) sync(ctx context.Context, events PortEventChan
 func (d *DockerEventPortProvider) handleContainerStart(ctx context.Context, containerID string, addCh chan<- portmap.Mapping) {
 	result, err := d.dockerCli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		log.Printf("Failed to inspect container %s: %v", shortID(containerID), err)
+		slog.Warn("Failed to inspect container", "container", shortID(containerID), "error", err)
 		return
 	}
 	info := result.Container

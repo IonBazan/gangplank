@@ -94,9 +94,11 @@ Issues and pull requests are welcome on [GitHub](https://github.com/IonBazan/gan
 Before sending a pull request, run:
 
 ```bash
-go test -race ./...
-golangci-lint run ./...
+make test
+make lint
 ```
+
+`make help` lists the other commands, like `make build` and `make docker`.
 
 ### Releasing
 

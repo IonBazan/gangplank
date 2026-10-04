@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -138,10 +138,10 @@ func (u *Client) ForwardPorts(ctx context.Context, mappings []portmap.Mapping) e
 	var errs []error
 	for _, m := range mappings {
 		if err := u.addPortMapping(ctx, m.Normalize()); err != nil {
-			log.Printf("Failed to forward port %d/%s for %s: %v", m.ExternalPort, m.Protocol, m.Name, err)
+			slog.Error("Failed to forward port", "port", m.Key(), "name", m.Name, "error", err)
 			errs = append(errs, fmt.Errorf("forward %d/%s: %w", m.ExternalPort, m.Protocol, err))
 		} else {
-			log.Printf("Successfully forwarded port %d/%s for %s", m.ExternalPort, m.Protocol, m.Name)
+			slog.Debug("Forwarded port", "port", m.Key(), "internal_port", m.InternalPort, "name", m.Name)
 		}
 	}
 
@@ -156,7 +156,7 @@ func (u *Client) addPortMapping(ctx context.Context, m portmap.Mapping) error {
 
 	err := u.add(ctx, m, lease)
 	if lease != 0 && hasErrorCode(err, errCodeOnlyPermanentLeasesSupported) {
-		log.Printf("Gateway only supports permanent leases, retrying without lease duration")
+		slog.Info("Gateway only supports permanent leases, retrying without lease duration")
 		u.permanentOnly.Store(true)
 		err = u.add(ctx, m, 0)
 	}

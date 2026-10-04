@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +29,7 @@ func (a *app) deleteCmd() *cobra.Command {
 			if err := gateway.DeletePortMapping(cmd.Context(), mapping.ExternalPort, mapping.Protocol); err != nil {
 				return fmt.Errorf("failed to delete port mapping %s: %w", mapping.Key(), err)
 			}
-			log.Printf("Successfully deleted port mapping %s", mapping.Key())
+			slog.Info("Deleted port mapping", "port", mapping.Key())
 			return nil
 		},
 	}

@@ -78,10 +78,10 @@ func useDocker(a *app, host string) {
 func run(t *testing.T, ctx context.Context, a *app, args ...string) (string, error) {
 	t.Helper()
 
-	var out bytes.Buffer
+	var out, logs bytes.Buffer
 	root := a.rootCmd()
 	root.SetOut(&out)
-	root.SetErr(&out)
+	root.SetErr(&logs)
 	root.SetArgs(args)
 
 	err := root.ExecuteContext(ctx)
@@ -279,7 +279,7 @@ func TestDaemonCommand_RetriesGateway(t *testing.T) {
 	conn := &upnptest.Connection{}
 
 	var attempts atomic.Int32
-	a.connectGateway = func(ctx context.Context) (*upnp.Client, error) {
+	a.connectGateway = func(context.Context) (*upnp.Client, error) {
 		if attempts.Add(1) < 3 {
 			return nil, errors.New("router is booting")
 		}
