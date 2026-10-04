@@ -105,7 +105,7 @@ func TestNewClient_DetectsLocalIP(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to determine local IP")
 		return
 	}
-	ip := net.ParseIP(client.LocalIP)
+	ip := net.ParseIP(client.InternalIP())
 	require.NotNil(t, ip)
 	assert.False(t, ip.IsLoopback())
 }
@@ -129,17 +129,26 @@ func TestGetLocalIP(t *testing.T) {
 	})
 }
 
-func TestNewDummyClient(t *testing.T) {
-	client := NewDummyClient(time.Minute)
-	assert.Equal(t, "192.168.1.100", client.InternalIP())
+func TestNewDryRunClient(t *testing.T) {
+	client := NewDryRunClient(time.Minute)
+	ctx := context.Background()
+	assert.NotEmpty(t, client.InternalIP())
 
-	ip, err := client.GetExternalIP(context.Background())
+	ports := []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}
+	assert.NoError(t, client.ForwardPorts(ctx, ports))
+	assert.NoError(t, client.DeletePortMapping(ctx, 80, "TCP"))
+
+	entries, err := client.ListPortMappings(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "203.0.113.1", ip)
+	assert.Empty(t, entries, "a dry run has no gateway to list")
+
+	ip, err := client.GetExternalIP(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, ip)
 }
 
 func TestClient_ForwardPorts_LeaseClamp(t *testing.T) {
-	conn := &DummyConnection{}
+	conn := &upnptest.Connection{}
 	client := NewClientWithConnection(conn, "192.168.1.100", -time.Minute)
 
 	require.NoError(t, client.ForwardPorts(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))

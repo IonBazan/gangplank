@@ -64,7 +64,7 @@ func newApp() *app {
 
 func (a *app) defaultGateway(ctx context.Context) (*upnp.Client, error) {
 	if a.opts.dryRun {
-		return upnp.NewDummyClient(a.opts.ttl), nil
+		return upnp.NewDryRunClient(a.opts.ttl), nil
 	}
 
 	return upnp.NewClient(ctx, a.opts.localIP, a.opts.gateway, a.opts.ttl)

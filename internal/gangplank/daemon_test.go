@@ -12,7 +12,7 @@ import (
 
 	"github.com/IonBazan/gangplank/internal/portmap"
 	"github.com/IonBazan/gangplank/internal/providers"
-	"github.com/IonBazan/gangplank/internal/upnp"
+	"github.com/IonBazan/gangplank/internal/upnp/upnptest"
 )
 
 // waitTimeout is only reached when a test fails, so it can be generous for slow CI runners.
@@ -38,15 +38,15 @@ func startDaemon(t *testing.T, d *Daemon) func() {
 }
 
 func staticManager(ports ...portmap.Mapping) *Manager {
-	return &Manager{PortProviders: []providers.PortProvider{&MockPortProvider{Ports: ports}}}
+	return &Manager{portProviders: []providers.PortProvider{&MockPortProvider{Ports: ports}}}
 }
 
-func connectTo(conn *upnp.DummyConnection) func(context.Context) (Gateway, error) {
+func connectTo(conn *upnptest.Connection) func(context.Context) (Gateway, error) {
 	return func(context.Context) (Gateway, error) { return newClient(conn), nil }
 }
 
 func TestDaemon_RefreshesAndCleansUpOnExit(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	web := portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "web"}
 	d := NewDaemon(staticManager(web), connectTo(conn), DaemonOptions{RefreshInterval: 10 * time.Millisecond, CleanupOnExit: true})
 
@@ -58,11 +58,11 @@ func TestDaemon_RefreshesAndCleansUpOnExit(t *testing.T) {
 	stop()
 
 	_, deleted := conn.Snapshot()
-	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 80, Protocol: "TCP"}}, deleted)
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 80, Protocol: "TCP"}}, deleted)
 }
 
 func TestDaemon_KeepsMappingsOnExitByDefault(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	d := NewDaemon(staticManager(portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}), connectTo(conn), DaemonOptions{RefreshInterval: time.Hour})
 
 	stop := startDaemon(t, d)
@@ -77,7 +77,7 @@ func TestDaemon_KeepsMappingsOnExitByDefault(t *testing.T) {
 }
 
 func TestDaemon_RetriesGatewayUntilAvailable(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	var attempts atomic.Int32
 	connect := func(ctx context.Context) (Gateway, error) {
 		if attempts.Add(1) < 3 {
@@ -98,10 +98,10 @@ func TestDaemon_RetriesGatewayUntilAvailable(t *testing.T) {
 }
 
 func TestDaemon_PollsEvents(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	events := &MockEventPortProvider{AddCh: make(chan portmap.Mapping, 1), DeleteCh: make(chan portmap.Mapping, 1)}
 	m := staticManager()
-	m.EventPortProviders = []providers.EventPortProvider{events}
+	m.eventProviders = []providers.EventPortProvider{events}
 	d := NewDaemon(m, connectTo(conn), DaemonOptions{RefreshInterval: time.Hour, Poll: true, CleanupOnStop: true})
 
 	stop := startDaemon(t, d)

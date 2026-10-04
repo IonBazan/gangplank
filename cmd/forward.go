@@ -40,7 +40,7 @@ func (a *app) forwardCmd() *cobra.Command {
 			log.Printf("UPnP client initialized with local IP: %s", gateway.InternalIP())
 			manager.SetGateway(gateway)
 
-			if err := manager.ForwardPorts(ctx, ports); err != nil {
+			if err := manager.Sync(ctx, ports, false); err != nil {
 				return errors.Join(fetchErr, fmt.Errorf("some port mappings could not be applied: %w", err))
 			}
 

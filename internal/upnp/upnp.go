@@ -82,7 +82,7 @@ func (e PortMappingEntry) IsOwned() bool {
 
 type Client struct {
 	uPnPConnection UPnPConnection
-	LocalIP        string
+	localIP        string
 	duration       time.Duration
 	permanentOnly  atomic.Bool
 }
@@ -116,17 +116,13 @@ func NewClient(ctx context.Context, localIPOverride, gatewayOverride string, dur
 func NewClientWithConnection(connection UPnPConnection, localIP string, duration time.Duration) *Client {
 	return &Client{
 		uPnPConnection: connection,
-		LocalIP:        localIP,
+		localIP:        localIP,
 		duration:       duration,
 	}
 }
 
-func NewDummyClient(duration time.Duration) *Client {
-	return NewClientWithConnection(&DummyConnection{}, "192.168.1.100", duration)
-}
-
 func (u *Client) InternalIP() string {
-	return u.LocalIP
+	return u.localIP
 }
 
 func Description(name string) string {
@@ -178,7 +174,7 @@ func (u *Client) add(ctx context.Context, m portmap.Mapping, lease uint32) error
 		uint16(m.ExternalPort),
 		m.Protocol,
 		uint16(m.InternalPort),
-		u.LocalIP,
+		u.localIP,
 		true,
 		Description(m.Name),
 		lease,
