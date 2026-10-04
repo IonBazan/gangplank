@@ -13,6 +13,7 @@ import (
 	"github.com/IonBazan/gangplank/internal/portmap"
 	"github.com/IonBazan/gangplank/internal/providers"
 	"github.com/IonBazan/gangplank/internal/upnp"
+	"github.com/IonBazan/gangplank/internal/upnp/upnptest"
 )
 
 type MockPortProvider struct {
@@ -44,7 +45,7 @@ func (m *MockEventPortProvider) Listen(ctx context.Context, events providers.Por
 	}
 }
 
-func newClient(conn *upnp.DummyConnection) *upnp.Client {
+func newClient(conn *upnptest.Connection) *upnp.Client {
 	return upnp.NewClientWithConnection(conn, "192.168.1.100", upnp.DefaultLeaseDuration)
 }
 
@@ -92,7 +93,7 @@ func TestManager_GetPortMappings(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g := &Manager{PortProviders: tt.portProviders}
+			g := &Manager{portProviders: tt.portProviders}
 			ports, err := g.GetPortMappings(context.Background())
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -104,35 +105,35 @@ func TestManager_GetPortMappings(t *testing.T) {
 	}
 }
 
-func TestManager_ForwardPorts(t *testing.T) {
+func TestManager_Sync(t *testing.T) {
 	ports := []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "web"}}
 
 	t.Run("No UPnP client", func(t *testing.T) {
 		g := &Manager{}
-		assert.NoError(t, g.ForwardPorts(context.Background(), ports))
+		assert.NoError(t, g.Sync(context.Background(), ports, false))
 	})
 
 	t.Run("Forward ports successfully", func(t *testing.T) {
-		conn := &upnp.DummyConnection{}
+		conn := &upnptest.Connection{}
 		g := &Manager{}
 		g.SetGateway(newClient(conn))
 
-		assert.NoError(t, g.ForwardPorts(context.Background(), ports))
+		assert.NoError(t, g.Sync(context.Background(), ports, false))
 		forwarded, _ := conn.Snapshot()
 		assert.Equal(t, []portmap.Mapping{{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", Name: "Gangplank UPnP: web"}}, forwarded)
 	})
 
 	t.Run("Forward with error", func(t *testing.T) {
-		conn := &upnp.DummyConnection{ForwardErr: errors.New("forward error")}
+		conn := &upnptest.Connection{ForwardErr: errors.New("forward error")}
 		g := &Manager{}
 		g.SetGateway(newClient(conn))
 
-		assert.ErrorIs(t, g.ForwardPorts(context.Background(), ports), conn.ForwardErr)
+		assert.ErrorIs(t, g.Sync(context.Background(), ports, false), conn.ForwardErr)
 	})
 }
 
 func TestManager_SyncPrunesStaleMappings(t *testing.T) {
-	conn := &upnp.DummyConnection{Existing: []upnp.PortMappingEntry{
+	conn := &upnptest.Connection{Existing: []upnptest.Mapping{
 		{ExternalPort: 80, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: web"},
 		{ExternalPort: 81, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: removed"},
 		{ExternalPort: 82, Protocol: "TCP", InternalIP: "192.168.1.200", Description: "Gangplank UPnP: other host"},
@@ -149,11 +150,11 @@ func TestManager_SyncPrunesStaleMappings(t *testing.T) {
 
 	require.NoError(t, g.Sync(context.Background(), desired, true))
 	_, deleted = conn.Snapshot()
-	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 81, Protocol: "TCP"}}, deleted)
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 81, Protocol: "TCP"}}, deleted)
 }
 
 func TestManager_Cleanup(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
 
@@ -161,7 +162,7 @@ func TestManager_Cleanup(t *testing.T) {
 	require.NoError(t, g.Cleanup(context.Background()))
 
 	_, deleted := conn.Snapshot()
-	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 80, Protocol: "TCP"}}, deleted)
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 80, Protocol: "TCP"}}, deleted)
 }
 
 func TestManager_PollAndForward(t *testing.T) {
@@ -175,7 +176,7 @@ func TestManager_PollAndForward(t *testing.T) {
 		addEvents   []portmap.Mapping
 		delEvents   []portmap.Mapping
 		wantAdded   []portmap.Mapping
-		wantDeleted []upnp.DeletedMapping
+		wantDeleted []upnptest.Deleted
 	}{
 		{
 			name:      "Poll without UPnP",
@@ -192,7 +193,7 @@ func TestManager_PollAndForward(t *testing.T) {
 			withUPnP:    true,
 			cleanup:     true,
 			delEvents:   []portmap.Mapping{minecraft},
-			wantDeleted: []upnp.DeletedMapping{{ExtPort: 25565, Protocol: "TCP"}},
+			wantDeleted: []upnptest.Deleted{{ExtPort: 25565, Protocol: "TCP"}},
 		},
 		{
 			name:      "Poll without cleanup ignores stops",
@@ -203,7 +204,7 @@ func TestManager_PollAndForward(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			conn := &upnp.DummyConnection{}
+			conn := &upnptest.Connection{}
 			g := &Manager{}
 			if tt.withUPnP {
 				g.SetGateway(newClient(conn))
@@ -219,7 +220,7 @@ func TestManager_PollAndForward(t *testing.T) {
 			for _, p := range tt.delEvents {
 				provider.DeleteCh <- p
 			}
-			g.EventPortProviders = []providers.EventPortProvider{provider}
+			g.eventProviders = []providers.EventPortProvider{provider}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan struct{})
@@ -260,14 +261,14 @@ func (f failingForwarder) ListPortMappings(ctx context.Context) ([]upnp.PortMapp
 func TestNewGangplank(t *testing.T) {
 	g := NewManager(&config.Config{}, nil)
 
-	require.Len(t, g.PortProviders, 2)
-	assert.IsType(t, &providers.ConfigPortProvider{}, g.PortProviders[0])
-	assert.IsType(t, &providers.DockerPortProvider{}, g.PortProviders[1])
-	require.Len(t, g.EventPortProviders, 1)
-	assert.IsType(t, &providers.DockerEventPortProvider{}, g.EventPortProviders[0])
+	require.Len(t, g.portProviders, 2)
+	assert.IsType(t, &providers.ConfigPortProvider{}, g.portProviders[0])
+	assert.IsType(t, &providers.DockerPortProvider{}, g.portProviders[1])
+	require.Len(t, g.eventProviders, 1)
+	assert.IsType(t, &providers.DockerEventPortProvider{}, g.eventProviders[0])
 
 	assert.False(t, g.HasGateway())
-	g.SetGateway(newClient(&upnp.DummyConnection{}))
+	g.SetGateway(newClient(&upnptest.Connection{}))
 	assert.True(t, g.HasGateway())
 	g.SetGateway(nil)
 	assert.False(t, g.HasGateway())
@@ -287,16 +288,16 @@ func TestManager_SyncReportsPruneErrors(t *testing.T) {
 
 	t.Run("List fails", func(t *testing.T) {
 		g := &Manager{}
-		g.SetGateway(failingForwarder{Client: newClient(&upnp.DummyConnection{}), listErr: errors.New("list failed")})
+		g.SetGateway(failingForwarder{Client: newClient(&upnptest.Connection{}), listErr: errors.New("list failed")})
 
 		err := g.Sync(context.Background(), desired, true)
 		assert.ErrorContains(t, err, "failed to list gateway mappings")
 	})
 
 	t.Run("Delete fails", func(t *testing.T) {
-		conn := &upnp.DummyConnection{
+		conn := &upnptest.Connection{
 			DeleteErr: errors.New("delete failed"),
-			Existing: []upnp.PortMappingEntry{
+			Existing: []upnptest.Mapping{
 				{ExternalPort: 81, Protocol: "tcp", InternalIP: "192.168.1.100", Description: "Gangplank UPnP: old"},
 			},
 		}
@@ -309,7 +310,7 @@ func TestManager_SyncReportsPruneErrors(t *testing.T) {
 }
 
 func TestManager_SyncReplacesForwardedSet(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
 	ctx := context.Background()
@@ -320,21 +321,21 @@ func TestManager_SyncReplacesForwardedSet(t *testing.T) {
 
 	// Only the latest desired set is cleaned up.
 	_, deleted := conn.Snapshot()
-	assert.Equal(t, []upnp.DeletedMapping{{ExtPort: 443, Protocol: "TCP"}}, deleted)
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 443, Protocol: "TCP"}}, deleted)
 }
 
 func TestManager_CleanupReportsErrors(t *testing.T) {
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
-	require.NoError(t, g.ForwardPorts(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}))
+	require.NoError(t, g.Sync(context.Background(), []portmap.Mapping{{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}}, false))
 
 	conn.DeleteErr = errors.New("delete failed")
 	assert.ErrorContains(t, g.Cleanup(context.Background()), "delete 80/TCP")
 }
 
 func TestManager_PollAndForwardSurvivesErrors(t *testing.T) {
-	conn := &upnp.DummyConnection{ForwardErr: errors.New("forward failed"), DeleteErr: errors.New("delete failed")}
+	conn := &upnptest.Connection{ForwardErr: errors.New("forward failed"), DeleteErr: errors.New("delete failed")}
 	g := &Manager{}
 	g.SetGateway(newClient(conn))
 
@@ -342,7 +343,7 @@ func TestManager_PollAndForwardSurvivesErrors(t *testing.T) {
 	provider.AddCh <- portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}
 	provider.DeleteCh <- portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP"}
 	provider.AddCh <- portmap.Mapping{ExternalPort: 81, InternalPort: 81, Protocol: "TCP"}
-	g.EventPortProviders = []providers.EventPortProvider{provider}
+	g.eventProviders = []providers.EventPortProvider{provider}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -358,4 +359,44 @@ func TestManager_PollAndForwardSurvivesErrors(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+func TestManager_EventsRespectPortOwnership(t *testing.T) {
+	conn := &upnptest.Connection{}
+	g := &Manager{}
+	g.SetGateway(newClient(conn))
+	ctx := context.Background()
+
+	fromConfig := portmap.Mapping{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "nginx"}
+	require.NoError(t, g.Sync(ctx, []portmap.Mapping{fromConfig}, false))
+
+	// A container asking for the same port neither takes it over nor closes it.
+	g.add(ctx, portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "tcp", Name: "web"})
+	g.delete(ctx, portmap.Mapping{ExternalPort: 80, InternalPort: 8080, Protocol: "tcp", Name: "web"})
+
+	forwarded, deleted := conn.Snapshot()
+	assert.Len(t, forwarded, 1, "only the initial sync forwarded the port")
+	assert.Empty(t, deleted)
+
+	// The owner itself can still close it.
+	g.delete(ctx, fromConfig)
+	_, deleted = conn.Snapshot()
+	assert.Equal(t, []upnptest.Deleted{{ExtPort: 80, Protocol: "TCP"}}, deleted)
+}
+
+func TestManager_EventsForFreePorts(t *testing.T) {
+	conn := &upnptest.Connection{}
+	g := &Manager{}
+	g.SetGateway(newClient(conn))
+	ctx := context.Background()
+	game := portmap.Mapping{ExternalPort: 25565, InternalPort: 25565, Protocol: "TCP", Name: "game"}
+
+	g.add(ctx, game)
+	g.add(ctx, game) // a restarted container claims its own port again
+	g.delete(ctx, game)
+	g.delete(ctx, game) // stop and die both arrive
+
+	forwarded, deleted := conn.Snapshot()
+	assert.Len(t, forwarded, 2)
+	assert.Len(t, deleted, 2, "deleting an unknown port is still passed to the gateway")
 }

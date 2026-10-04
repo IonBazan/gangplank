@@ -276,7 +276,7 @@ func TestDaemonCommand_Poll(t *testing.T) {
 func TestDaemonCommand_RetriesGateway(t *testing.T) {
 	a := newApp()
 	newFakeDocker(t, a, webContainer)
-	conn := &upnp.DummyConnection{}
+	conn := &upnptest.Connection{}
 
 	var attempts atomic.Int32
 	a.connectGateway = func(ctx context.Context) (*upnp.Client, error) {

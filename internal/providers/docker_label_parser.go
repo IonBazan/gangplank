@@ -11,11 +11,10 @@ import (
 	"github.com/IonBazan/gangplank/internal/portmap"
 )
 
-type ContainerInfo struct {
-	Labels        map[string]string
-	Ports         []container.PortSummary
-	ContainerName string
-	ID            string
+type containerInfo struct {
+	name  string
+	id    string
+	ports []container.PortSummary
 }
 
 // labelForward lists host ports to forward: "published", or "<external>:<host port>[/<protocol>]".
@@ -26,71 +25,65 @@ const labelForward = "gangplank.forward"
 const labelForwardContainer = "gangplank.forward.container"
 
 func extractPortsFromContainer(ctr container.Summary) []portmap.Mapping {
-	var mappings []portmap.Mapping
-	containerName := shortID(ctr.ID)
+	info := containerInfo{name: shortID(ctr.ID), id: ctr.ID, ports: ctr.Ports}
 	if len(ctr.Names) > 0 && ctr.Names[0] != "" {
-		containerName = strings.TrimPrefix(ctr.Names[0], "/")
-	}
-	info := ContainerInfo{
-		Labels:        ctr.Labels,
-		Ports:         ctr.Ports,
-		ContainerName: containerName,
-		ID:            ctr.ID,
+		info.name = strings.TrimPrefix(ctr.Names[0], "/")
 	}
 
-	if val, ok := ctr.Labels[labelForward]; ok {
-		mappings = append(mappings, parseDockerLabel(val, info, false)...)
+	var mappings []portmap.Mapping
+	if label, ok := ctr.Labels[labelForward]; ok {
+		mappings = append(mappings, parseLabel(label, info, portmap.Parse)...)
 	}
-	if val, ok := ctr.Labels[labelForwardContainer]; ok {
-		mappings = append(mappings, parseDockerLabel(val, info, true)...)
+	if label, ok := ctr.Labels[labelForwardContainer]; ok {
+		mappings = append(mappings, parseLabel(label, info, func(spec string) (portmap.Mapping, error) {
+			return resolveContainerPort(spec, info.ports)
+		})...)
 	}
 
 	return dedupe(mappings)
 }
 
-func parseDockerLabel(label string, info ContainerInfo, isContainerRef bool) []portmap.Mapping {
+// parseLabel splits a comma-separated label and turns each entry into a mapping with parse.
+func parseLabel(label string, info containerInfo, parse func(spec string) (portmap.Mapping, error)) []portmap.Mapping {
 	var mappings []portmap.Mapping
 
 	for _, part := range strings.Split(label, ",") {
 		part = strings.TrimSpace(part)
-		if part == "" {
+		switch part {
+		case "":
+			continue
+		case "published":
+			mappings = append(mappings, publishedPorts(info)...)
 			continue
 		}
 
-		if part == "published" {
-			for _, port := range info.Ports {
-				if !isForwardable(port) {
-					continue
-				}
-				// The router forwards to this host, so the internal port is the host port.
-				mappings = append(mappings, portmap.Mapping{
-					ExternalPort: int(port.PublicPort),
-					InternalPort: int(port.PublicPort),
-					Protocol:     strings.ToUpper(port.Type),
-					Name:         info.ContainerName,
-				})
-			}
+		mapping, err := parse(part)
+		if err != nil {
+			log.Printf("Invalid port mapping %s for container %s: %v", part, shortID(info.id), err)
 			continue
 		}
-
-		if isContainerRef {
-			mapping, err := resolveContainerPort(part, info.Ports)
-			if err != nil {
-				log.Printf("Invalid container port mapping %s for container %s: %v", part, shortID(info.ID), err)
-				continue
-			}
-			mapping.Name = info.ContainerName
-			mappings = append(mappings, mapping)
-		} else {
-			mapping, err := portmap.Parse(part)
-			if err != nil {
-				log.Printf("Invalid port mapping %s for container %s: %v", part, shortID(info.ID), err)
-				continue
-			}
-			mapping.Name = info.ContainerName
-			mappings = append(mappings, mapping)
-		}
+		mapping.Name = info.name
+		mappings = append(mappings, mapping)
 	}
+
+	return mappings
+}
+
+// The router forwards to this host, so the internal port is the host port.
+func publishedPorts(info containerInfo) []portmap.Mapping {
+	var mappings []portmap.Mapping
+	for _, port := range info.ports {
+		if !isForwardable(port) {
+			continue
+		}
+		mappings = append(mappings, portmap.Mapping{
+			ExternalPort: int(port.PublicPort),
+			InternalPort: int(port.PublicPort),
+			Protocol:     strings.ToUpper(port.Type),
+			Name:         info.name,
+		})
+	}
+
 	return mappings
 }
 

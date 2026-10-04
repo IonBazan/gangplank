@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/IonBazan/gangplank/internal/portmap"
+	"github.com/IonBazan/gangplank/internal/upnp/upnptest"
 )
 
 func TestClient_ForwardPorts(t *testing.T) {
@@ -62,7 +63,7 @@ func TestClient_ForwardPorts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &DummyConnection{ForwardErr: tt.forwardErr}
+			mock := &upnptest.Connection{ForwardErr: tt.forwardErr}
 			client := NewClientWithConnection(mock, tt.localIP, DefaultLeaseDuration)
 
 			err := client.ForwardPorts(context.Background(), tt.mappings)
@@ -81,14 +82,14 @@ func TestClient_ForwardPorts(t *testing.T) {
 }
 
 type permanentOnlyConnection struct {
-	DummyConnection
+	upnptest.Connection
 	leases []uint32
 }
 
 func (c *permanentOnlyConnection) AddPortMappingCtx(ctx context.Context, host string, ext uint16, proto string, internal uint16, client string, enabled bool, desc string, lease uint32) error {
 	c.leases = append(c.leases, lease)
 	if lease != 0 {
-		return NewUPnPError(errCodeOnlyPermanentLeasesSupported, "OnlyPermanentLeasesSupported")
+		return upnptest.UPnPError(errCodeOnlyPermanentLeasesSupported, "OnlyPermanentLeasesSupported")
 	}
 	return nil
 }
@@ -112,14 +113,14 @@ func TestClient_DeletePortMapping(t *testing.T) {
 		extPort   int
 		protocol  string
 		deleteErr error
-		wantCalls []DeletedMapping
+		wantCalls []upnptest.Deleted
 		wantErr   bool
 	}{
 		{
 			name:      "Delete TCP port",
 			extPort:   8080,
 			protocol:  "tcp",
-			wantCalls: []DeletedMapping{{ExtPort: 8080, Protocol: "TCP"}},
+			wantCalls: []upnptest.Deleted{{ExtPort: 8080, Protocol: "TCP"}},
 		},
 		{
 			name:      "Delete with error",
@@ -132,7 +133,7 @@ func TestClient_DeletePortMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &DummyConnection{DeleteErr: tt.deleteErr}
+			mock := &upnptest.Connection{DeleteErr: tt.deleteErr}
 			client := NewClientWithConnection(mock, "192.168.1.100", DefaultLeaseDuration)
 
 			err := client.DeletePortMapping(context.Background(), tt.extPort, tt.protocol)
@@ -148,7 +149,7 @@ func TestClient_DeletePortMapping(t *testing.T) {
 }
 
 type failingListConnection struct {
-	DummyConnection
+	upnptest.Connection
 	err error
 }
 
@@ -170,7 +171,9 @@ func TestClient_ListPortMappings(t *testing.T) {
 	}{
 		{
 			name: "Single mapping",
-			conn: &DummyConnection{},
+			conn: &upnptest.Connection{Existing: []upnptest.Mapping{
+				{ExternalPort: 8080, InternalPort: 80, Protocol: "TCP", InternalIP: "192.168.1.100", Description: "Test Mapping", Lease: 3600},
+			}},
 			want: []PortMappingEntry{{
 				ExternalPort:  8080,
 				InternalPort:  80,
@@ -182,13 +185,17 @@ func TestClient_ListPortMappings(t *testing.T) {
 			}},
 		},
 		{
+			name: "Empty list",
+			conn: &upnptest.Connection{},
+		},
+		{
 			name: "End of list signalled with 713",
-			conn: &failingListConnection{err: NewUPnPError(713, "SpecifiedArrayIndexInvalid")},
+			conn: &failingListConnection{err: upnptest.UPnPError(713, "SpecifiedArrayIndexInvalid")},
 			want: []PortMappingEntry{first},
 		},
 		{
 			name: "End of list signalled with 714",
-			conn: &failingListConnection{err: NewUPnPError(714, "NoSuchEntryInArray")},
+			conn: &failingListConnection{err: upnptest.UPnPError(714, "NoSuchEntryInArray")},
 			want: []PortMappingEntry{first},
 		},
 		{

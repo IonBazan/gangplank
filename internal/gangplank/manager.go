@@ -25,9 +25,11 @@ type DockerClient interface {
 	providers.EventInspector
 }
 
+// Manager keeps track of which source owns each forwarded port, so that one
+// source never removes or replaces a port that another source asked for.
 type Manager struct {
-	PortProviders      []providers.PortProvider
-	EventPortProviders []providers.EventPortProvider
+	portProviders  []providers.PortProvider
+	eventProviders []providers.EventPortProvider
 
 	mu        sync.Mutex
 	gw        Gateway
@@ -36,11 +38,11 @@ type Manager struct {
 
 func NewManager(cfg *config.Config, dockerCli DockerClient) *Manager {
 	return &Manager{
-		PortProviders: []providers.PortProvider{
+		portProviders: []providers.PortProvider{
 			providers.NewConfigPortProvider(cfg),
 			providers.NewDockerPortProvider(dockerCli),
 		},
-		EventPortProviders: []providers.EventPortProvider{
+		eventProviders: []providers.EventPortProvider{
 			providers.NewDockerEventPortProvider(dockerCli),
 		},
 	}
@@ -70,7 +72,7 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 	owners := map[string]string{}
 	var errs []error
 
-	for _, portProvider := range mgr.PortProviders {
+	for _, portProvider := range mgr.portProviders {
 		ports, err := portProvider.GetPortMappings(ctx)
 		if err != nil {
 			log.Printf("Error fetching port mappings: %v", err)
@@ -93,54 +95,33 @@ func (mgr *Manager) GetPortMappings(ctx context.Context) ([]portmap.Mapping, err
 	return allPorts, errors.Join(errs...)
 }
 
-func (mgr *Manager) ForwardPorts(ctx context.Context, ports []portmap.Mapping) error {
+// Sync forwards the desired mappings and makes them the current set.
+// With prune, Gangplank mappings for this host that are no longer desired are deleted.
+func (mgr *Manager) Sync(ctx context.Context, desired []portmap.Mapping, prune bool) error {
 	gw := mgr.gateway()
 	if gw == nil {
 		log.Println("UPnP client is not initialized, skipping port forwarding.")
 		return nil
 	}
 
-	err := gw.ForwardPorts(ctx, ports)
-	mgr.mu.Lock()
-	if mgr.forwarded == nil {
-		mgr.forwarded = map[string]portmap.Mapping{}
-	}
-	for _, p := range ports {
-		p = p.Normalize()
-		mgr.forwarded[p.Key()] = p
-	}
-	mgr.mu.Unlock()
-
-	return err
-}
-
-// With prune, Gangplank mappings for this host that are no longer desired are deleted.
-func (mgr *Manager) Sync(ctx context.Context, desired []portmap.Mapping, prune bool) error {
-	if mgr.gateway() == nil {
-		log.Println("UPnP client is not initialized, skipping port forwarding.")
-		return nil
-	}
-
-	err := mgr.ForwardPorts(ctx, desired)
-
-	mgr.mu.Lock()
 	keep := make(map[string]portmap.Mapping, len(desired))
 	for _, p := range desired {
 		p = p.Normalize()
 		keep[p.Key()] = p
 	}
+	mgr.mu.Lock()
 	mgr.forwarded = keep
 	mgr.mu.Unlock()
 
+	err := gw.ForwardPorts(ctx, desired)
 	if prune {
-		err = errors.Join(err, mgr.prune(ctx, keep))
+		err = errors.Join(err, mgr.prune(ctx, gw, keep))
 	}
 
 	return err
 }
 
-func (mgr *Manager) prune(ctx context.Context, keep map[string]portmap.Mapping) error {
-	gw := mgr.gateway()
+func (mgr *Manager) prune(ctx context.Context, gw Gateway, keep map[string]portmap.Mapping) error {
 	entries, err := gw.ListPortMappings(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list gateway mappings: %w", err)
@@ -199,12 +180,10 @@ func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool) {
 	}
 
 	var wg sync.WaitGroup
-	for _, provider := range mgr.EventPortProviders {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for _, provider := range mgr.eventProviders {
+		wg.Go(func() {
 			provider.Listen(ctx, providers.PortEventChannels{Add: addCh, Delete: deleteCh})
-		}()
+		})
 	}
 	defer wg.Wait()
 
@@ -212,14 +191,57 @@ func (mgr *Manager) PollAndForward(ctx context.Context, cleanup bool) {
 		select {
 		case <-ctx.Done():
 			return
-		case p := <-addCh:
-			log.Printf("New container port mapping (Container: %s): External=%d, Internal=%d, Protocol=%s", p.Name, p.ExternalPort, p.InternalPort, p.Protocol)
-			if err := mgr.ForwardPorts(ctx, []portmap.Mapping{p}); err != nil {
-				log.Printf("Error forwarding new port: %v", err)
-			}
+		case m := <-addCh:
+			mgr.add(ctx, m)
 		case m := <-deleteCh:
 			mgr.delete(ctx, m)
 		}
+	}
+}
+
+// claim records m as forwarded unless another source already owns its port.
+func (mgr *Manager) claim(m portmap.Mapping) bool {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+
+	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
+		log.Printf("Port %s is already used by %q, ignoring %q", m.Key(), owner.Name, m.Name)
+		return false
+	}
+	if mgr.forwarded == nil {
+		mgr.forwarded = map[string]portmap.Mapping{}
+	}
+	mgr.forwarded[m.Key()] = m
+	return true
+}
+
+// release forgets m unless its port belongs to another source.
+func (mgr *Manager) release(m portmap.Mapping) bool {
+	mgr.mu.Lock()
+	defer mgr.mu.Unlock()
+
+	if owner, ok := mgr.forwarded[m.Key()]; ok && owner.Name != m.Name {
+		log.Printf("Port %s is still used by %q, keeping it", m.Key(), owner.Name)
+		return false
+	}
+	delete(mgr.forwarded, m.Key())
+	return true
+}
+
+func (mgr *Manager) add(ctx context.Context, m portmap.Mapping) {
+	gw := mgr.gateway()
+	if gw == nil {
+		log.Println("UPnP client is not initialized, skipping port forwarding.")
+		return
+	}
+
+	m = m.Normalize()
+	log.Printf("New container port mapping (Container: %s): External=%d, Internal=%d, Protocol=%s", m.Name, m.ExternalPort, m.InternalPort, m.Protocol)
+	if !mgr.claim(m) {
+		return
+	}
+	if err := gw.ForwardPorts(ctx, []portmap.Mapping{m}); err != nil {
+		log.Printf("Error forwarding new port: %v", err)
 	}
 }
 
@@ -230,10 +252,9 @@ func (mgr *Manager) delete(ctx context.Context, m portmap.Mapping) {
 	}
 
 	m = m.Normalize()
-	mgr.mu.Lock()
-	delete(mgr.forwarded, m.Key())
-	mgr.mu.Unlock()
-
+	if !mgr.release(m) {
+		return
+	}
 	if err := gw.DeletePortMapping(ctx, m.ExternalPort, m.Protocol); err != nil {
 		log.Printf("Failed to delete port mapping %s for %s: %v", m.Key(), m.Name, err)
 	} else {
