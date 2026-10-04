@@ -75,7 +75,7 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 					ID:    "pg789",
 					Names: []string{"/postgres"},
 					Ports: []container.PortSummary{
-						{PublicPort: 5433, PrivatePort: 5432, Type: "tcp"}, // Different host port
+						{PublicPort: 5433, PrivatePort: 5432, Type: "tcp"},
 					},
 					Labels: map[string]string{
 						labelForwardContainer: "5432/tcp",
@@ -119,4 +119,19 @@ func TestDockerPortProvider_GetPortMappings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDockerPortProvider_SortsByContainerName(t *testing.T) {
+	mockClient := &MockDockerClient{Containers: []container.Summary{
+		{ID: "z", Names: []string{"/zeta"}, Labels: map[string]string{labelForward: "443, 80"}},
+		{ID: "a", Names: []string{"/alpha"}, Labels: map[string]string{labelForward: "8080"}},
+	}}
+
+	got, err := NewDockerPortProvider(mockClient).GetPortMappings(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, []types.PortMapping{
+		{ExternalPort: 8080, InternalPort: 8080, Protocol: "TCP", Name: "alpha"},
+		{ExternalPort: 80, InternalPort: 80, Protocol: "TCP", Name: "zeta"},
+		{ExternalPort: 443, InternalPort: 443, Protocol: "TCP", Name: "zeta"},
+	}, got)
 }

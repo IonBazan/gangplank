@@ -28,7 +28,7 @@ func (d *DockerPortProvider) GetPortMappings(ctx context.Context) ([]types.PortM
 		return nil, err
 	}
 
-	// Sort by container name so conflicts between containers resolve deterministically.
+	// Sorted so that conflicts between containers always resolve the same way.
 	var mappings []types.PortMapping
 	for _, ctr := range byContainer {
 		mappings = append(mappings, ctr.mappings...)
@@ -37,7 +37,10 @@ func (d *DockerPortProvider) GetPortMappings(ctx context.Context) ([]types.PortM
 		if mappings[i].Name != mappings[j].Name {
 			return mappings[i].Name < mappings[j].Name
 		}
-		return mappings[i].Key() < mappings[j].Key()
+		if mappings[i].ExternalPort != mappings[j].ExternalPort {
+			return mappings[i].ExternalPort < mappings[j].ExternalPort
+		}
+		return mappings[i].Protocol < mappings[j].Protocol
 	})
 
 	return mappings, nil

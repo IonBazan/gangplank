@@ -1,38 +1,33 @@
-![logo](logo.png)
+<p align="center"><img src="logo.svg" alt="Gangplank logo" width="400"></p>
 
 # Gangplank
 
-Gangplank is a CLI tool to manage UPnP port mappings, designed with Docker in mind. 
-It automatically grabs port mappings from running Docker containers or YAML files and forwards them to your router via UPnP, making it a perfect fit for homelabs and self-hosted environments. 
+[![CI](https://github.com/IonBazan/gangplank/actions/workflows/ci.yml/badge.svg)](https://github.com/IonBazan/gangplank/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/IonBazan/gangplank)](https://github.com/IonBazan/gangplank/releases)
+[![Docker Pulls](https://img.shields.io/docker/pulls/ionbazan/gangplank)](https://hub.docker.com/r/ionbazan/gangplank)
 
-Whether you’re running media servers, game servers, or development setups behind a NAT, Gangplank simplifies exposing services to your local network or WAN.
+Gangplank opens ports on your router for your Docker containers.
+Add a label to a container and Gangplank asks your router, over UPnP, to forward its ports.
+When the container stops, the ports can be closed again.
 
-> **Gangplank** - (nautical) A movable board used to board or disembark from a ship, bridging the gap between vessel and shore
+It is made for homelabs and self-hosted setups: media servers, game servers, Nextcloud and anything else you want to reach from outside your home network.
+
+> **Gangplank** (nautical): a movable board used to get on or off a ship, bridging the gap between ship and shore.
 
 ## Why Gangplank?
 
-- **Dynamic Environments**: Docker containers start and stop, and Gangplank keeps ports in sync.
-- **Ease of Use**: No need to log into your router’s admin page—Gangplank does it via UPnP.
-- **Self-Hosted Accessibility**: Expose services like Plex, Nextcloud, or game servers to friends or the internet without static IPs or complex NAT rules.
+- **No router admin pages.** Gangplank talks to your router for you.
+- **Follows your containers.** Ports are opened when containers start and refreshed while they run.
+- **Simple setup.** One container with access to the Docker socket, and labels on the services you want to expose.
 
 ## Getting started
 
-Gangplank is distributed as a Docker image, ideal for homelabbers and self-hosters using Docker.
-Standalone binaries for Linux, macOS, Windows and FreeBSD are also available on the [releases page](https://github.com/IonBazan/gangplank/releases).
+You need:
 
-### Prerequisites
+- Docker
+- A router with UPnP enabled
 
-- Docker installed on your system.
-- A UPnP-enabled router.
-
-### Running Gangplank
-
-Pull the image:
-```bash
-docker pull ionbazan/gangplank:latest
-```
-
-Run Gangplank as a daemon (default mode):
+Run Gangplank as a daemon:
 
 ```bash
 docker run -d --network host \
@@ -41,7 +36,7 @@ docker run -d --network host \
     ionbazan/gangplank:latest
 ```
 
-or add it to your `docker-compose.yml`:
+Or with Docker Compose:
 
 ```yaml
 services:
@@ -53,48 +48,50 @@ services:
     restart: unless-stopped
 ```
 
+Gangplank must use the host network. Otherwise it can't find your router.
+
+If you don't use Docker, download a binary for Linux, macOS, Windows or FreeBSD from the [releases page](https://github.com/IonBazan/gangplank/releases).
+
 ## Usage
 
-Exposing a service is as easy as adding a label to your Docker container:
-Using `gangplank.forward="published"` will expose all published ports of the container to the world on the same port numbers:
+Add the `gangplank.forward` label to a container. With `published`, every port the container publishes on the host is forwarded on the same port number:
 
 ```yaml
 services:
   nginx:
     image: nginx
     ports:
-     - "80:80"
-     - "443:443"
+      - "80:80"
+      - "443:443"
     labels:
-      gangplank.forward: "published" # Expose port 80 and 443 to the world
+      gangplank.forward: "published"
 ```
 
-You can find more usage examples in the [usage documentation](doc/usage.md).
+You can also pick specific ports, forward a container port that Docker published on a random host port, or list ports for services outside Docker in a YAML file.
+See the [usage guide](doc/usage.md) for examples.
 
-## Advanced usage
-
-For advanced usage, including command-line options and environment variables, check out the [advanced usage documentation](doc/advanced.md).
+All options, environment variables and commands are described in the [advanced guide](doc/advanced.md).
 
 ## Features
-- Fetch port mappings from Docker containers or YAML files.
-- Forward ports via UPnP to your router.
-- Poll Docker events to dynamically add/remove mappings (`daemon --poll`, `--cleanup-on-stop`), reconnecting automatically if Docker restarts.
-- Periodically refresh mappings to prevent expiration (`daemon` with `--refresh-interval`).
-- Optionally remove stale mappings (`--prune`) and clean up on shutdown (`--cleanup-on-exit`).
-- List, add or delete individual port mappings.
 
+- Reads ports from container labels and from a YAML file.
+- Opens ports as soon as containers start (`daemon --poll`) and can close them when they stop (`--cleanup-on-stop`).
+- Renews mappings before they expire (`--refresh-interval`).
+- Can remove leftover mappings (`--prune`) and clean up when it shuts down (`--cleanup-on-exit`).
+- Keeps working when Docker restarts or the router is not ready yet.
+- Commands to list, add and delete single mappings.
 
-## Notes
+## Good to know
 
-- Gangplank uses a 1-hour lease duration for UPnP mappings by default. In `daemon` mode, `--refresh-interval` (default 15m) renews them before expiration.
-- Use `--network host` for UPnP to reach your router; Docker’s bridge network won’t work for homelab NAT traversal.
-- Mounting the Docker socket grants root-equivalent access to the host. See the [security notes](doc/advanced.md#security) for using a socket proxy instead.
+- Mappings are created with a 1 hour lease by default. The daemon renews them every 15 minutes.
+- Access to the Docker socket is the same as root access on the host. The [security notes](doc/advanced.md#security) show how to use a socket proxy instead.
+- Every port you label can be reached from the internet. Only expose what you mean to.
 
 ## Contributing
 
-Open issues or PRs on [GitHub](https://github.com/ionbazan/gangplank)!
+Issues and pull requests are welcome on [GitHub](https://github.com/IonBazan/gangplank).
 
-Run the checks locally before submitting:
+Before sending a pull request, run:
 
 ```bash
 go test -race ./...
@@ -103,17 +100,16 @@ golangci-lint run ./...
 
 ### Releasing
 
-Push a `vX.Y.Z` tag. CI then publishes multi-arch Docker images to Docker Hub and GHCR, and [GoReleaser](https://goreleaser.com) creates a GitHub release with binaries, checksums and a changelog.
+Push a tag like `v1.2.3`. CI then:
+
+- publishes Docker images for all supported platforms to Docker Hub and GHCR,
+- creates a GitHub release with binaries, checksums and a changelog (using [GoReleaser](https://goreleaser.com)).
 
 ## License
 
 MIT
 
-## Similar Projects
+## Similar projects
 
-There are existing projects that provide similar functionality, but they are either outdated or not actively maintained. 
-Gangplank aims to fill this gap with a modern, Docker-centric approach to UPnP port mapping.
-
-- https://github.com/danielbodart/portical
-- https://github.com/ProjectInitiative/upnp-service
-
+- [Portical](https://github.com/danielbodart/portical)
+- [upnp-service](https://github.com/ProjectInitiative/upnp-service)

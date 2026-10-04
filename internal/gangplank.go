@@ -14,7 +14,6 @@ import (
 	"github.com/IonBazan/gangplank/internal/upnp"
 )
 
-// Forwarder applies port mappings on the gateway.
 type Forwarder interface {
 	ForwardPorts(ctx context.Context, mappings []types.PortMapping) error
 	DeletePortMapping(ctx context.Context, externalPort int, protocol string) error
@@ -22,7 +21,6 @@ type Forwarder interface {
 	InternalIP() string
 }
 
-// DockerClient is the subset of the Docker API Gangplank uses.
 type DockerClient interface {
 	providers.EventInspector
 }
@@ -48,14 +46,12 @@ func NewGangplank(cfg *config.Config, dockerCli DockerClient) *Gangplank {
 	}
 }
 
-// SetForwarder sets the gateway client. A nil client disables forwarding.
 func (g *Gangplank) SetForwarder(f Forwarder) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.upnp = f
 }
 
-// HasForwarder reports whether a gateway client is configured.
 func (g *Gangplank) HasForwarder() bool {
 	return g.forwarder() != nil
 }
@@ -66,9 +62,8 @@ func (g *Gangplank) forwarder() Forwarder {
 	return g.upnp
 }
 
-// GetPortMappings collects mappings from all providers. A failing provider does
-// not prevent the others from contributing; all errors are joined. When several
-// sources claim the same external port and protocol, the first one wins.
+// A failing provider does not drop the others' mappings. When several sources
+// claim the same external port and protocol, the first one wins.
 func (g *Gangplank) GetPortMappings(ctx context.Context) ([]types.PortMapping, error) {
 	log.Println("Fetching port mappings...")
 	allPorts := []types.PortMapping{}
@@ -98,7 +93,6 @@ func (g *Gangplank) GetPortMappings(ctx context.Context) ([]types.PortMapping, e
 	return allPorts, errors.Join(errs...)
 }
 
-// ForwardPorts forwards the given mappings and remembers them as active.
 func (g *Gangplank) ForwardPorts(ctx context.Context, ports []types.PortMapping) error {
 	f := g.forwarder()
 	if f == nil {
@@ -120,8 +114,7 @@ func (g *Gangplank) ForwardPorts(ctx context.Context, ports []types.PortMapping)
 	return err
 }
 
-// Sync forwards the desired mappings. With prune, it also removes mappings this
-// host created earlier that are no longer desired (e.g. removed containers).
+// With prune, Gangplank mappings for this host that are no longer desired are deleted.
 func (g *Gangplank) Sync(ctx context.Context, desired []types.PortMapping, prune bool) error {
 	if g.forwarder() == nil {
 		log.Println("UPnP client is not initialized, skipping port forwarding.")
@@ -172,7 +165,6 @@ func (g *Gangplank) prune(ctx context.Context, keep map[string]types.PortMapping
 	return errors.Join(errs...)
 }
 
-// Cleanup deletes every mapping forwarded by this instance.
 func (g *Gangplank) Cleanup(ctx context.Context) error {
 	f := g.forwarder()
 	if f == nil {
@@ -199,8 +191,6 @@ func (g *Gangplank) Cleanup(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// PollAndForward listens for container events until ctx is cancelled,
-// forwarding new mappings and, with cleanup, deleting stopped ones.
 func (g *Gangplank) PollAndForward(ctx context.Context, cleanup bool) {
 	addCh := make(chan types.PortMapping)
 	var deleteCh chan types.PortMapping

@@ -1,13 +1,18 @@
+# IP address mappings point to. Leave empty to detect it.
 localIp: ~
+# Router UPnP description URL. Leave empty to find the router on the network.
 gateway: ~
+# How long each mapping lasts before it expires.
 ttl: 60m
+# How often the daemon renews mappings. Keep it shorter than ttl.
 refreshInterval: 15m
+# Ports for services that don't run in Docker. Protocol defaults to TCP.
 ports:
   - externalPort: 8080
     internalPort: 80
     protocol: TCP
-    name: yaml-web
-  - externalPort: 9000
-    internalPort: 90
+    name: web
+  - externalPort: 51820
+    internalPort: 51820
     protocol: UDP
-    name: yaml-stream
+    name: wireguard

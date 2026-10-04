@@ -21,7 +21,6 @@ import (
 
 const DefaultLeaseDuration = 60 * time.Minute
 
-// DescriptionPrefix marks mappings created by Gangplank.
 const DescriptionPrefix = "Gangplank UPnP"
 
 const (
@@ -29,7 +28,7 @@ const (
 	callTimeout      = 10 * time.Second
 )
 
-// UPnP error codes (UPnP IGD WANIPConnection spec).
+// From the UPnP IGD WANIPConnection spec.
 const (
 	errCodeSpecifiedArrayIndexInvalid   = 713
 	errCodeNoSuchEntryInArray           = 714
@@ -77,12 +76,10 @@ type PortMappingEntry struct {
 	Enabled       bool
 }
 
-// IsOwned reports whether the mapping was created by Gangplank.
 func (e PortMappingEntry) IsOwned() bool {
 	return strings.HasPrefix(e.Description, DescriptionPrefix)
 }
 
-// Client wraps the UPnP client and local IP for port forwarding.
 type Client struct {
 	uPnPConnection UPnPConnection
 	LocalIP        string
@@ -128,12 +125,10 @@ func NewDummyClient(duration time.Duration) *Client {
 	return NewClientWithConnection(&DummyConnection{}, "192.168.1.100", duration)
 }
 
-// InternalIP returns the LAN address mappings are forwarded to.
 func (u *Client) InternalIP() string {
 	return u.LocalIP
 }
 
-// Description returns the gateway description used for a mapping with the given name.
 func Description(name string) string {
 	if name == "" {
 		return DescriptionPrefix
@@ -142,7 +137,7 @@ func Description(name string) string {
 	return fmt.Sprintf("%s: %s", DescriptionPrefix, name)
 }
 
-// ForwardPorts adds all mappings, continuing past failures. Errors are joined.
+// ForwardPorts keeps going after a failure and returns all errors joined.
 func (u *Client) ForwardPorts(ctx context.Context, mappings []types.PortMapping) error {
 	var errs []error
 	for _, m := range mappings {
@@ -197,7 +192,6 @@ func (u *Client) DeletePortMapping(ctx context.Context, externalPort int, protoc
 	return u.uPnPConnection.DeletePortMappingCtx(ctx, "", uint16(externalPort), strings.ToUpper(protocol))
 }
 
-// GetExternalIP returns the WAN address reported by the gateway.
 func (u *Client) GetExternalIP(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
@@ -205,7 +199,6 @@ func (u *Client) GetExternalIP(ctx context.Context) (string, error) {
 	return u.uPnPConnection.GetExternalIPAddressCtx(ctx)
 }
 
-// ListPortMappings retrieves all active UPnP port mappings.
 func (u *Client) ListPortMappings(ctx context.Context) ([]PortMappingEntry, error) {
 	var mappings []PortMappingEntry
 
@@ -235,7 +228,6 @@ func (u *Client) ListPortMappings(ctx context.Context) ([]PortMappingEntry, erro
 	return mappings, nil
 }
 
-// isEndOfList reports whether err signals the end of the generic port mapping table.
 // Gateways differ: most return 713, some 714, and a few only set the description.
 func isEndOfList(err error) bool {
 	var serr *soap.SOAPFaultError
@@ -290,8 +282,8 @@ func clientFromGateway(ctx context.Context, gatewayURL string) (*gateway, error)
 	return nil, fmt.Errorf("no supported UPnP service found at %s", gatewayURL)
 }
 
-// getLocalIP returns the local address used to reach the gateway, so that
-// bridges (docker0, br-*), VPNs and other interfaces are not picked by mistake.
+// Prefer the address that routes to the gateway, so that docker0, other bridges
+// or VPN interfaces are not picked by mistake.
 func getLocalIP(location *url.URL, discoveredFrom net.IP) (string, error) {
 	if location != nil && location.Hostname() != "" {
 		if ip, err := routeSourceIP(location.Hostname()); err == nil {

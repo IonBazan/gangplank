@@ -63,7 +63,7 @@ var (
 )
 
 func Execute() {
-	// Diagnostics go to stderr so command output (e.g. list) stays pipeable.
+	// Keep stdout clean so command output can be piped.
 	fmt.Fprint(os.Stderr, banner)
 	fmt.Fprintf(os.Stderr, "Running version %s built on %s (commit %s)\n", version, created, commit)
 
@@ -88,12 +88,10 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 }
 
-// envVarName returns the environment variable for a flag, e.g. refresh-interval -> GANGPLANK_REFRESH_INTERVAL.
 func envVarName(flag string) string {
 	return envPrefix + "_" + strings.ToUpper(strings.ReplaceAll(flag, "-", "_"))
 }
 
-// bindFlags fills flags not set on the command line from the environment or config file.
 // Precedence: flag > environment variable > config file > default.
 func bindFlags(flags *pflag.FlagSet) {
 	flags.VisitAll(func(f *pflag.Flag) {
